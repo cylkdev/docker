@@ -46,7 +46,7 @@ defmodule Docker.MixProject do
     [
       {:sorrel, github: "cylkdev/sorrel"},
       {:sandbox_registry, "~> 0.1", only: [:dev, :test]},
-      {:elixir_exec, github: "cylkdev/elixir_exec"},
+      {:elixir_exec, github: "cylkdev/elixir_exec", branch: "main"},
       {:credo, "~> 1.4", only: [:dev, :test], runtime: false},
       {:blitz_credo_checks, "~> 0.1.5", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
