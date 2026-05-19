@@ -44,15 +44,17 @@ defmodule Docker.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:sorrel, github: "cylkdev/sorrel"},
-      {:sandbox_registry, "~> 0.1", only: [:dev, :test]},
-      {:elixir_exec, github: "cylkdev/elixir_exec", branch: "main"},
       {:credo, "~> 1.4", only: [:dev, :test], runtime: false},
       {:blitz_credo_checks, "~> 0.1.5", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.13", only: :test, runtime: false},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
-      {:ex_utils, git: "https://github.com/cylkdev/ex_utils.git", branch: "main"}
+      {:sandbox_registry, "~> 0.1", only: [:dev, :test]},
+      # ---
+      {:req, "~> 0.5"},
+      {:elixir_exec, github: "cylkdev/elixir_exec", branch: "main"},
+      {:ex_utils, github: "cylkdev/ex_utils", branch: "main"},
+      {:oneoone, github: "cylkdev/oneoone", branch: "main"}
     ]
   end
 

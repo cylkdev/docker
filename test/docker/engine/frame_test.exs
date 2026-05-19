@@ -1,7 +1,7 @@
-defmodule Docker.Engine.FrameTest do
+defmodule Docker.FrameTest do
   use ExUnit.Case, async: true
 
-  alias Docker.Engine.Frame
+  alias Docker.Frame
 
   describe "demux/1" do
     test "decodes a single complete stdout frame" do

@@ -83,7 +83,7 @@ of decoded NDJSON event maps. Consume them with the standard `Stream` and
 {:ok, events} = Docker.pull_image("alpine:3.19")
 
 events
-|> Stream.each(&Docker.Logger.log_pull_event/1)
+|> Stream.each(&Docker.Log.log_pull_event/1)
 |> Stream.run()
 ```
 
@@ -103,11 +103,11 @@ pull-based: write with `send/2`, read with `recv/3`.
 ```elixir
 {:ok, session} = Docker.attach("my-container", stdin: true, stdout: true, stderr: true)
 
-:ok = Docker.Streaming.Session.send(session, "echo hello\n")
+Docker.Streaming.Session.send(session, "echo hello\n")
 
 {:ok, frames} = Docker.Streaming.Session.recv(session, 5_000)
 
-:ok = Docker.Streaming.Session.close(session)
+Docker.Streaming.Session.close(session)
 ```
 
 Each frame is a `Docker.Frame` tagged with `:stdout`, `:stderr`, or `:stdin`,
@@ -115,7 +115,7 @@ plus the raw bytes the daemon emitted.
 
 ## Testing without a daemon
 
-`Docker.Minty.Sandbox` lets tests register canned responses per-process so they
+`Docker.Sandbox` lets tests register canned responses per-process so they
 can run async without touching a real daemon. Pass `sandbox: [enabled: true]`
 to opt a call into sandbox mode:
 
@@ -143,7 +143,7 @@ end
 ```
 
 Each `set_<action>_responses/1` accepts a list of zero-arg functions; the
-sandbox calls them in order on each invocation. See `Docker.Minty.Sandbox` for
+sandbox calls them in order on each invocation. See `Docker.Sandbox` for
 the full registration API.
 
 ## Configuration
@@ -152,19 +152,18 @@ Defaults can be set in `config/config.exs`:
 
 ```elixir
 config :docker,
-  # Default endpoint (a Docker.Minty.Endpoint struct):
-  endpoint: %Docker.Minty.Endpoint{
-    transport: :unix,
-    socket_path: "/var/run/docker.sock"
+  # Default endpoint (a Docker.Endpoint struct):
+  endpoint: %Docker.Endpoint{
+    minty: %OneOhOne.Endpoint{
+      transport: :unix,
+      socket_path: "/var/run/docker.sock"
+    },
+    version: "1.45"
   },
   # ...or just a unix socket path for the legacy default:
   socket_path: "/var/run/docker.sock",
   # Default Docker Engine API version:
-  version: "1.45",
-  # Pool sizing (per-endpoint):
-  pool_size: 10,
-  pool_max_overflow: 5,
-  poolboy_timeout: 5_000
+  version: "1.45"
 ```
 
 ### Endpoint resolution precedence
@@ -180,7 +179,18 @@ For each call, the client picks the first source that yields an endpoint:
 7. The standard filesystem socket paths (`~/.docker/run/docker.sock`,
    `/var/run/docker.sock`).
 
-See `Docker.Minty.Endpoint.from_options/1` for the authoritative rules.
+See `Docker.Endpoint.from_options/1` for the authoritative rules.
+
+## SSH daemons
+
+`ssh://` URLs work only with the streaming session API (`attach/2`,
+`exec_session/3`, `send_message/4`), which routes through
+[OneOhOne](https://github.com/cylkdev/oneoone). Unary HTTP calls
+(`ping`, `version`, `list_containers`, etc.) use `Req`, which does not
+speak SSH — passing `ssh://` to those returns
+`{:error, :ssh_not_supported_for_unary}`. Build the endpoint struct
+directly (carrying a pre-built `%OneOhOne.Endpoint{transport: :ssh, ...}`
+with `:target` and `:ssh` auth) and pass it via `options[:endpoint]`.
 
 ## Documentation
 

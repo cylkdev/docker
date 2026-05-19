@@ -1,7 +1,7 @@
-defmodule Docker.Engine.SandboxTest do
+defmodule Docker.SandboxTest do
   use ExUnit.Case, async: true
 
-  alias Docker.Engine.Sandbox
+  alias Docker.Sandbox
 
   # ---------------------------------------------------------------------------
   # The full action table from the plan. Each row drives the exhaustive arity
@@ -23,14 +23,14 @@ defmodule Docker.Engine.SandboxTest do
     {:delete_container, 3},
     {:container_logs, 3},
     {:container_running?, 2},
-    {:create_container, 3},
+    {:create_container, 4},
     {:find_image, 2},
     {:pull_image, 3},
     {:build_image, 5},
     {:materialize_image, 4},
     {:delete_image, 3},
     {:find_network, 2},
-    {:create_network, 2},
+    {:create_network, 3},
     {:connect_network, 3},
     {:delete_network, 2},
     {:exec_create, 3},
@@ -210,8 +210,8 @@ defmodule Docker.Engine.SandboxTest do
 
   @tag :exhaustive
   test "every action in the canonical table is exported with the right arity" do
-    Code.ensure_loaded!(Docker.Engine.Sandbox)
-    exports = Docker.Engine.Sandbox.__info__(:functions)
+    Code.ensure_loaded!(Docker.Sandbox)
+    exports = Docker.Sandbox.__info__(:functions)
 
     for {action, public_arity} <- @actions do
       # Elixir does not allow `?` mid-identifier, so helper names drop the `?`
@@ -221,10 +221,10 @@ defmodule Docker.Engine.SandboxTest do
       setter_name = String.to_atom("set_#{base}_responses")
 
       assert {response_name, public_arity} in exports,
-             "Docker.Engine.Sandbox is missing #{response_name}/#{public_arity}"
+             "Docker.Sandbox is missing #{response_name}/#{public_arity}"
 
       assert {setter_name, 1} in exports,
-             "Docker.Engine.Sandbox is missing #{setter_name}/1"
+             "Docker.Sandbox is missing #{setter_name}/1"
     end
   end
 end

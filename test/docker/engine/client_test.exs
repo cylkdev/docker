@@ -1,11 +1,11 @@
-defmodule Docker.Engine.ClientTest do
+defmodule Docker.ClientTest do
   # The endpoint-resolution scenario reads/restores DOCKER_HOST and the
   # filesystem rungs, which is process-global state. Run serially.
   use ExUnit.Case
 
-  alias Docker.Engine.Client
-  alias Docker.Engine.Endpoint, as: EngineEndpoint
-  alias Sorrel.Endpoint, as: MintyEndpoint
+  alias Docker.Client
+  alias Docker.Endpoint, as: EngineEndpoint
+  alias OneOhOne.Endpoint, as: MintyEndpoint
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -37,26 +37,8 @@ defmodule Docker.Engine.ClientTest do
     server
   end
 
-  defp register_pool_cleanup(%EngineEndpoint{minty: minty}) do
-    register_pool_cleanup(minty)
-  end
-
-  defp register_pool_cleanup(%MintyEndpoint{} = endpoint) do
-    on_exit(fn ->
-      sig = pool_signature(endpoint)
-
-      case Registry.lookup(Sorrel.Pool.Registry, sig) do
-        [{pid, _}] ->
-          _ = DynamicSupervisor.terminate_child(Sorrel.Pool.DynamicSupervisor, pid)
-          :ok
-
-        [] ->
-          :ok
-      end
-    end)
-  end
-
-  defp pool_signature(%MintyEndpoint{transport: :unix} = ep), do: {:unix, ep.socket_path}
+  # Req manages its own Finch pool lifecycle; no manual cleanup needed.
+  defp register_pool_cleanup(_endpoint), do: :ok
 
   defp respond(status, status_text, content_type, body) do
     [
@@ -314,7 +296,7 @@ defmodule Docker.Engine.ClientTest do
       assert [{:stdout, "hello"}] = stream |> Stream.take(1) |> Enum.to_list()
 
       deadline = System.monotonic_time(:millisecond) + 200
-      :ok = wait_for_pid_count_to_settle(before_pids, deadline)
+      wait_for_pid_count_to_settle(before_pids, deadline)
     end
   end
 

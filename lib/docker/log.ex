@@ -1,4 +1,4 @@
-defmodule Docker.Logger do
+defmodule Docker.Log do
   @moduledoc false
   require Logger
 
@@ -9,20 +9,11 @@ defmodule Docker.Logger do
     |> Logger.debug()
   end
 
-  if macro_exported?(Logger, :warning, 2) do
-    @spec warning(prefix :: binary(), message :: binary()) :: :ok
-    def warning(prefix, message) do
-      prefix
-      |> format_message(message)
-      |> Logger.warning()
-    end
-  else
-    @spec warning(prefix :: binary(), message :: binary()) :: :ok
-    def warning(prefix, message) do
-      prefix
-      |> format_message(message)
-      |> Logger.warn()
-    end
+  @spec warning(prefix :: binary(), message :: binary()) :: :ok
+  def warning(prefix, message) do
+    prefix
+    |> format_message(message)
+    |> Logger.warning()
   end
 
   @spec error(prefix :: binary(), message :: binary()) :: :ok
@@ -40,7 +31,7 @@ defmodule Docker.Logger do
 
       {:ok, events} = Docker.pull_image("alpine")
       events
-      |> Stream.each(&Docker.Logger.log_pull_event/1)
+      |> Stream.each(&Docker.Log.log_pull_event/1)
       |> Stream.run()
 
   ## Parameters

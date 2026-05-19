@@ -21,7 +21,7 @@ defmodule FakeHttpServer do
       ...>   responder: fn _req -> "HTTP/1.1 200 OK\\r\\nContent-Length: 0\\r\\n\\r\\n" end
       ...> )
       iex> {:ok, _port} = FakeHttpServer.port(server)
-      iex> :ok = FakeHttpServer.stop(server)
+      iex> FakeHttpServer.stop(server)
 
   ## TLS variant
 
@@ -224,11 +224,11 @@ defmodule FakeHttpServer do
   end
 
   defp close_listen_socket(:tls, ls) do
-    :ok = :ssl.close(ls)
+    :ssl.close(ls)
   end
 
   defp close_listen_socket(_other_transport, ls) do
-    :ok = :gen_tcp.close(ls)
+    :gen_tcp.close(ls)
   end
 
   defp remove_unix_socket_file(:unix, %{socket_path: socket_path}) do

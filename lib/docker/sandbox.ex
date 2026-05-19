@@ -1,5 +1,5 @@
 if Code.ensure_loaded?(SandboxRegistry) do
-  defmodule Docker.Engine.Sandbox do
+  defmodule Docker.Sandbox do
     @moduledoc """
     Per-process canned responses for `Docker.*` functions. Lets your tests
     pretend a Docker daemon is there without ever opening a connection.
@@ -11,7 +11,7 @@ if Code.ensure_loaded?(SandboxRegistry) do
 
     Start the registry once in `test_helper.exs`:
 
-        Docker.Engine.Sandbox.start_link()
+        Docker.Sandbox.start_link()
         ExUnit.start()
 
     In a test, register a response and call the API with `sandbox: [enabled: true]`:
@@ -20,7 +20,7 @@ if Code.ensure_loaded?(SandboxRegistry) do
           use ExUnit.Case, async: true
 
           test "lists containers" do
-            Docker.Engine.Sandbox.set_list_containers_responses([
+            Docker.Sandbox.set_list_containers_responses([
               fn -> {:ok, [%{"Id" => "abc"}]} end
             ])
 
@@ -29,7 +29,7 @@ if Code.ensure_loaded?(SandboxRegistry) do
           end
 
           test "find an image with a regex id" do
-            Docker.Engine.Sandbox.set_find_image_responses([
+            Docker.Sandbox.set_find_image_responses([
               {~r/alpine.*/, fn _id -> {:ok, %{"Id" => "sha256:abc"}} end}
             ])
 
@@ -55,12 +55,13 @@ if Code.ensure_loaded?(SandboxRegistry) do
         verbatim. If your code has a bug that passes the wrong shape, the
         sandbox will not catch it.
       * It does not simulate transport errors unless your function returns
-        one. Test transport-error handling against the real `Sorrel`
-        modules with a fake server.
+        one. Test transport-error handling against `Req` (for unary calls
+        and NDJSON streams) or `OneOhOne` (for streaming sessions) with a
+        fake server.
 
     ## Examples
 
-        iex> Docker.Engine.Sandbox.set_ping_responses([fn -> {:ok, "OK"} end])
+        iex> Docker.Sandbox.set_ping_responses([fn -> {:ok, "OK"} end])
         iex> Docker.ping(sandbox: [enabled: true])
         {:ok, "OK"}
     """
@@ -169,7 +170,7 @@ if Code.ensure_loaded?(SandboxRegistry) do
 
     @doc "Returns the registered response for `Docker.endpoint/1`."
     def endpoint_response(opts) do
-      doc_examples = ["fn -> %Sorrel.Endpoint{} end", "fn (opts) -> ... end"]
+      doc_examples = ["fn -> %OneOhOne.Endpoint{} end", "fn (opts) -> ... end"]
       func = find!(:endpoint, "*", doc_examples)
 
       case :erlang.fun_info(func)[:arity] do
@@ -416,15 +417,16 @@ if Code.ensure_loaded?(SandboxRegistry) do
       set_responses(:container_running?, tuples)
     end
 
-    # ---- create_container ("*", arity 3: name, image, opts) -----------------
+    # ---- create_container ("*", arity 4: name, image, labels, opts) --------
 
-    @doc "Returns the registered response for `Docker.create_container/3`."
-    def create_container_response(name, image, opts) do
+    @doc "Returns the registered response for `Docker.create_container/4`."
+    def create_container_response(name, image, labels, opts) do
       doc_examples = [
         "fn -> {:ok, %{...}} end",
         "fn (name) -> ... end",
         "fn (name, image) -> ... end",
-        "fn (name, image, opts) -> ... end"
+        "fn (name, image, labels) -> ... end",
+        "fn (name, image, labels, opts) -> ... end"
       ]
 
       func = find!(:create_container, "*", doc_examples)
@@ -433,12 +435,13 @@ if Code.ensure_loaded?(SandboxRegistry) do
         0 -> func.()
         1 -> func.(name)
         2 -> func.(name, image)
-        3 -> func.(name, image, opts)
+        3 -> func.(name, image, labels)
+        4 -> func.(name, image, labels, opts)
         _ -> raise_unsupported_arity(func, doc_examples)
       end
     end
 
-    @doc "Registers responses for `Docker.create_container/3`."
+    @doc "Registers responses for `Docker.create_container/4`."
     def set_create_container_responses(funcs) do
       set_responses(:create_container, Enum.map(funcs, fn f -> {"*", f} end))
     end
@@ -608,14 +611,15 @@ if Code.ensure_loaded?(SandboxRegistry) do
       set_responses(:find_network, tuples)
     end
 
-    # ---- create_network ("*", arity 2: name, opts) --------------------------
+    # ---- create_network ("*", arity 3: name, labels, opts) -----------------
 
-    @doc "Returns the registered response for `Docker.create_network/2`."
-    def create_network_response(name, opts) do
+    @doc "Returns the registered response for `Docker.create_network/3`."
+    def create_network_response(name, labels, opts) do
       doc_examples = [
         "fn -> {:ok, %{...}} end",
         "fn (name) -> ... end",
-        "fn (name, opts) -> ... end"
+        "fn (name, labels) -> ... end",
+        "fn (name, labels, opts) -> ... end"
       ]
 
       func = find!(:create_network, "*", doc_examples)
@@ -623,12 +627,13 @@ if Code.ensure_loaded?(SandboxRegistry) do
       case :erlang.fun_info(func)[:arity] do
         0 -> func.()
         1 -> func.(name)
-        2 -> func.(name, opts)
+        2 -> func.(name, labels)
+        3 -> func.(name, labels, opts)
         _ -> raise_unsupported_arity(func, doc_examples)
       end
     end
 
-    @doc "Registers responses for `Docker.create_network/2`."
+    @doc "Registers responses for `Docker.create_network/3`."
     def set_create_network_responses(funcs) do
       set_responses(:create_network, Enum.map(funcs, fn f -> {"*", f} end))
     end

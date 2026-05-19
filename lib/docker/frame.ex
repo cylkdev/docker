@@ -1,4 +1,4 @@
-defmodule Docker.Engine.Frame do
+defmodule Docker.Frame do
   @moduledoc """
   Decoder for Docker's multiplexed stream framing.
 
@@ -119,7 +119,7 @@ defmodule Docker.Engine.Frame do
 
   ## Where this is used in the codebase
 
-    * `Docker.Engine.Streaming.Session` — incrementally, as bytes arrive
+    * `Docker.Streaming.Session` — incrementally, as bytes arrive
       on a passive socket.
     * `Docker.container_logs/3` and `Docker.exec_start/2` — once,
       over a complete response body.
@@ -169,10 +169,10 @@ defmodule Docker.Engine.Frame do
 
   ## Examples
 
-      iex> Docker.Engine.Frame.demux(<<1, 0, 0, 0, 0, 0, 0, 5, "hello">>)
+      iex> Docker.Frame.demux(<<1, 0, 0, 0, 0, 0, 0, 5, "hello">>)
       {"hello", "", ""}
 
-      iex> Docker.Engine.Frame.demux_all(
+      iex> Docker.Frame.demux_all(
       ...>   <<1, 0, 0, 0, 0, 0, 0, 5, "hello", 2, 0, 0, 0, 0, 0, 0, 3, "err">>
       ...> )
       "helloerr"
@@ -205,17 +205,17 @@ defmodule Docker.Engine.Frame do
   ## Examples
 
       # Complete stdout frame, no remaining
-      iex> Docker.Engine.Frame.demux(<<1, 0, 0, 0, 0, 0, 0, 5, "hello">>)
+      iex> Docker.Frame.demux(<<1, 0, 0, 0, 0, 0, 0, 5, "hello">>)
       {"hello", "", ""}
 
       # stdout and stderr in one buffer
-      iex> Docker.Engine.Frame.demux(
+      iex> Docker.Frame.demux(
       ...>   <<1, 0, 0, 0, 0, 0, 0, 5, "hello", 2, 0, 0, 0, 0, 0, 0, 3, "err">>
       ...> )
       {"hello", "err", ""}
 
       # Partial trailing frame — caller prepends it next time
-      iex> Docker.Engine.Frame.demux(<<1, 0, 0, 0, 0, 0, 0, 5, "hel">>)
+      iex> Docker.Frame.demux(<<1, 0, 0, 0, 0, 0, 0, 5, "hel">>)
       {"", "", <<1, 0, 0, 0, 0, 0, 0, 5, "hel">>}
 
   """
@@ -256,13 +256,13 @@ defmodule Docker.Engine.Frame do
   ## Examples
 
       # Two frames, payloads concatenated
-      iex> Docker.Engine.Frame.demux_all(
+      iex> Docker.Frame.demux_all(
       ...>   <<1, 0, 0, 0, 0, 0, 0, 5, "hello", 2, 0, 0, 0, 0, 0, 0, 3, "err">>
       ...> )
       "helloerr"
 
       # Empty body
-      iex> Docker.Engine.Frame.demux_all("")
+      iex> Docker.Frame.demux_all("")
       ""
 
   """
@@ -312,22 +312,22 @@ defmodule Docker.Engine.Frame do
   ## Examples
 
       # Single complete stdout frame, no leftover
-      iex> Docker.Engine.Frame.decode_chunk(<<1, 0, 0, 0, 0, 0, 0, 5, "hello">>, "")
+      iex> Docker.Frame.decode_chunk(<<1, 0, 0, 0, 0, 0, 0, 5, "hello">>, "")
       {[{:stdout, "hello"}], ""}
 
       # Two complete frames in one chunk
-      iex> Docker.Engine.Frame.decode_chunk(
+      iex> Docker.Frame.decode_chunk(
       ...>   <<1, 0, 0, 0, 0, 0, 0, 5, "hello", 2, 0, 0, 0, 0, 0, 0, 3, "err">>,
       ...>   ""
       ...> )
       {[stdout: "hello", stderr: "err"], ""}
 
       # Partial header — buffered for next call
-      iex> Docker.Engine.Frame.decode_chunk(<<1, 0, 0, 0, 0>>, "")
+      iex> Docker.Frame.decode_chunk(<<1, 0, 0, 0, 0>>, "")
       {[], <<1, 0, 0, 0, 0>>}
 
       # Header complete, payload short — buffered for next call
-      iex> Docker.Engine.Frame.decode_chunk(<<1, 0, 0, 0, 0, 0, 0, 5, "hel">>, "")
+      iex> Docker.Frame.decode_chunk(<<1, 0, 0, 0, 0, 0, 0, 5, "hel">>, "")
       {[], <<1, 0, 0, 0, 0, 0, 0, 5, "hel">>}
 
   """

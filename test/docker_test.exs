@@ -1,20 +1,20 @@
 defmodule DockerTest do
   use ExUnit.Case, async: true
 
-  alias Docker.Engine.Sandbox
+  alias Docker.Sandbox
 
   @sandbox [sandbox: [enabled: true]]
 
   describe "endpoint/1" do
-    test "delegates to Sorrel.Endpoint.from_options when sandbox is off" do
+    test "delegates to Docker.Endpoint.from_options when sandbox is off" do
       # Without sandbox: real resolution. With explicit socket override the
       # call must succeed and return a unix endpoint pointing at that path.
-      assert {:ok, %Sorrel.Endpoint{transport: :unix, socket_path: "/tmp/x.sock"}} =
+      assert {:ok, %OneOhOne.Endpoint{transport: :unix, socket_path: "/tmp/x.sock"}} =
                Docker.endpoint(socket: "/tmp/x.sock")
     end
 
     test "returns the registered response in sandbox mode" do
-      endpoint = %Sorrel.Endpoint{transport: :tcp, host: "h", port: 2375}
+      endpoint = %OneOhOne.Endpoint{transport: :tcp, host: "h", port: 2375}
 
       Sandbox.set_endpoint_responses([fn -> {:ok, endpoint} end])
 
@@ -67,6 +67,76 @@ defmodule DockerTest do
 
       assert {:ok, [%{"Id" => "abc"}]} = Docker.list_containers(%{all: true}, @sandbox)
     end
+
+    test "encodes the :labels option into the params filters JSON" do
+      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
+
+      assert {:ok, params} =
+               Docker.list_containers(
+                 %{all: true},
+                 Keyword.merge(@sandbox, labels: ["resource_group=group_1"])
+               )
+
+      assert params[:all] == true
+      assert params[:filters] == ~s({"label":["resource_group=group_1"]})
+    end
+
+    test "encodes multiple labels" do
+      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
+
+      assert {:ok, params} =
+               Docker.list_containers(
+                 %{},
+                 Keyword.merge(@sandbox, labels: ["resource_group=group_1", "tier=web"])
+               )
+
+      assert params[:filters] == ~s({"label":["resource_group=group_1","tier=web"]})
+    end
+
+    test "option :labels overrides any :filters value in params" do
+      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
+
+      assert {:ok, params} =
+               Docker.list_containers(
+                 %{filters: ~s({"label":["overridden=yes"]})},
+                 Keyword.merge(@sandbox, labels: ["resource_group=group_1"])
+               )
+
+      assert params[:filters] == ~s({"label":["resource_group=group_1"]})
+    end
+
+    test "option :labels overrides a stringy \"filters\" key in params" do
+      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
+
+      assert {:ok, params} =
+               Docker.list_containers(
+                 %{"filters" => ~s({"label":["overridden=yes"]})},
+                 Keyword.merge(@sandbox, labels: ["kept=true"])
+               )
+
+      assert params[:filters] == ~s({"label":["kept=true"]})
+      refute Map.has_key?(params, "filters")
+    end
+
+    test "passes params through unchanged when :labels option is absent" do
+      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
+
+      passthrough = %{all: true, filters: "raw-value"}
+
+      assert {:ok, ^passthrough} = Docker.list_containers(passthrough, @sandbox)
+    end
+
+    test "raises when :labels is not a list" do
+      assert_raise RuntimeError, ~r/Expected labels to be a list of strings/, fn ->
+        Docker.list_containers(%{}, Keyword.merge(@sandbox, labels: "raw"))
+      end
+    end
+
+    test "raises when :labels contains non-strings" do
+      assert_raise RuntimeError, ~r/Expected labels to be a list of strings/, fn ->
+        Docker.list_containers(%{}, Keyword.merge(@sandbox, labels: [:not_a_string]))
+      end
+    end
   end
 
   describe "find_image/2" do
@@ -107,11 +177,14 @@ defmodule DockerTest do
     end
   end
 
-  describe "create_network/2" do
+  describe "create_network/3" do
     test "returns the new id" do
-      Sandbox.set_create_network_responses([fn -> {:ok, "net-id"} end])
+      Sandbox.set_create_network_responses([
+        fn _name, _labels, _opts -> {:ok, "net-id"} end
+      ])
 
-      assert {:ok, "net-id"} = Docker.create_network("sandbox-net", @sandbox)
+      assert {:ok, "net-id"} =
+               Docker.create_network("sandbox-net", %{}, @sandbox)
     end
   end
 
@@ -131,7 +204,7 @@ defmodule DockerTest do
         {~r/.*/, fn _id -> :ok end}
       ])
 
-      assert :ok = Docker.delete_network("net1", @sandbox)
+      assert Docker.delete_network("net1", @sandbox)
     end
   end
 
@@ -145,13 +218,14 @@ defmodule DockerTest do
     end
   end
 
-  describe "create_container/3" do
+  describe "create_container/4" do
     test "returns the new id" do
       Sandbox.set_create_container_responses([
-        fn _name, _image, _opts -> {:ok, "fake_id"} end
+        fn _name, _image, _labels, _opts -> {:ok, "fake_id"} end
       ])
 
-      assert {:ok, "fake_id"} = Docker.create_container("c1", "alpine", @sandbox)
+      assert {:ok, "fake_id"} =
+               Docker.create_container("c1", "alpine", %{}, @sandbox)
     end
 
     test "interactive_shell: invalid value raises before sandbox dispatch" do
@@ -161,11 +235,16 @@ defmodule DockerTest do
       # should hit the non-sandbox path; this test documents that the
       # sandbox path returns whatever the registered fn returns.
       Sandbox.set_create_container_responses([
-        fn _name, _image, _opts -> {:ok, "fake_id"} end
+        fn _name, _image, _labels, _opts -> {:ok, "fake_id"} end
       ])
 
       assert {:ok, "fake_id"} =
-               Docker.create_container("c1", "alpine", [interactive_shell: 123] ++ @sandbox)
+               Docker.create_container(
+                 "c1",
+                 "alpine",
+                 %{},
+                 [interactive_shell: 123] ++ @sandbox
+               )
     end
   end
 
@@ -354,14 +433,14 @@ defmodule DockerTest do
       ])
 
       assert {:ok, stream} =
-               Docker.build_image("priv/docker", "Dockerfile", "docker-test:tiny", %{}, @sandbox)
+               Docker.build_image("examples/busybox-example", "Dockerfile", "docker-test:tiny", %{}, @sandbox)
 
       assert events === Enum.to_list(stream)
     end
 
     test "raises when tag is empty (before sandbox dispatch)" do
       assert_raise RuntimeError, ~r/Expected tag/, fn ->
-        Docker.build_image("priv/docker", "Dockerfile", "", %{}, @sandbox)
+        Docker.build_image("examples/busybox-example", "Dockerfile", "", %{}, @sandbox)
       end
     end
 
@@ -386,6 +465,29 @@ defmodule DockerTest do
 
       assert {:ok, %{id: "img"}} =
                Docker.materialize_image("alpine", "alpine", %{}, @sandbox)
+    end
+  end
+
+  describe "build_create_container_config/4 (labels)" do
+    test "writes the supplied labels into the payload verbatim" do
+      labels = %{"team" => "platform", "com.docker.kind" => "worker"}
+      config = Docker.build_create_container_config("session-xyz", "alpine", labels, [])
+
+      assert config["Labels"] === labels
+    end
+
+    test "writes an empty map when no labels are supplied" do
+      config = Docker.build_create_container_config("session-xyz", "alpine", %{}, [])
+
+      assert config["Labels"] === %{}
+    end
+  end
+
+  describe "create_container/4 name validation" do
+    test "raises when name is not a binary" do
+      assert_raise FunctionClauseError, fn ->
+        Docker.create_container(nil, "alpine", %{}, @sandbox)
+      end
     end
   end
 end

@@ -1,10 +1,10 @@
-defmodule Docker.Engine.Streaming.SessionTest do
+defmodule Docker.Streaming.SessionTest do
   use ExUnit.Case
 
-  alias Docker.Engine.Streaming.Session
+  alias Docker.Streaming.Session
 
-  @dockerfile "priv/docker/Dockerfile"
-  @context_path "priv/docker"
+  @dockerfile "examples/busybox-example/Dockerfile"
+  @context_path "examples/busybox-example"
 
   setup_all do
     image_tag = unique_image_tag("docker-test:tiny")
@@ -31,12 +31,12 @@ defmodule Docker.Engine.Streaming.SessionTest do
       session = Session.from_upgrade(client, "", false)
 
       # Send only a header and partial payload
-      :ok = :gen_tcp.send(server, <<1, 0, 0, 0, 0, 0, 0, 5, "hel">>)
+      :gen_tcp.send(server, <<1, 0, 0, 0, 0, 0, 0, 5, "hel">>)
       {:ok, "", session} = Session.recv(session, {:idle_timeout, 50})
       assert session.frame_buffer === <<1, 0, 0, 0, 0, 0, 0, 5, "hel">>
 
       # Send the rest -- completes the frame
-      :ok = :gen_tcp.send(server, "lo")
+      :gen_tcp.send(server, "lo")
       {:ok, "hello", session} = Session.recv(session, {:idle_timeout, 50})
       assert session.frame_buffer === ""
 
@@ -89,7 +89,7 @@ defmodule Docker.Engine.Streaming.SessionTest do
       {:ok, _server} = :gen_tcp.accept(listen)
 
       session = Session.from_upgrade(client, "", false)
-      :ok = Session.close(session)
+      Session.close(session)
 
       closed_session = %{session | closed: true}
       assert {:error, :closed} = Session.send(closed_session, "hello\n")
@@ -105,8 +105,8 @@ defmodule Docker.Engine.Streaming.SessionTest do
       {:ok, _server} = :gen_tcp.accept(listen)
 
       session = Session.from_upgrade(client, "", false)
-      assert :ok = Session.close(session)
-      assert :ok = Session.close(%{session | closed: true})
+      assert Session.close(session)
+      assert Session.close(%{session | closed: true})
     end
   end
 
@@ -117,32 +117,32 @@ defmodule Docker.Engine.Streaming.SessionTest do
       {:ok, session} = Docker.attach(container_id)
 
       {:ok, _initial, session} =
-        Docker.Engine.Streaming.Session.recv(session, {:idle_timeout, 200})
+        Docker.Streaming.Session.recv(session, {:idle_timeout, 200})
 
-      :ok = Docker.Engine.Streaming.Session.send(session, "hello\n")
-      {:ok, first, session} = Docker.Engine.Streaming.Session.recv(session, {:idle_timeout, 500})
+      Docker.Streaming.Session.send(session, "hello\n")
+      {:ok, first, session} = Docker.Streaming.Session.recv(session, {:idle_timeout, 500})
       assert String.contains?(first, "got: hello")
 
-      :ok = Docker.Engine.Streaming.Session.send(session, "world\n")
-      {:ok, second, session} = Docker.Engine.Streaming.Session.recv(session, {:idle_timeout, 500})
+      Docker.Streaming.Session.send(session, "world\n")
+      {:ok, second, session} = Docker.Streaming.Session.recv(session, {:idle_timeout, 500})
       assert String.contains?(second, "got: world")
 
-      :ok = Docker.Engine.Streaming.Session.close(session)
+      Docker.Streaming.Session.close(session)
     end
 
     test "recv with delimiter returns through the delimiter only", %{image_tag: image_tag} do
       container_id = create_repl_container("ci-attach-delim", image_tag)
 
       {:ok, session} = Docker.attach(container_id)
-      :ok = Docker.Engine.Streaming.Session.send(session, "alpha\n")
+      Docker.Streaming.Session.send(session, "alpha\n")
 
       {:ok, output, session} =
-        Docker.Engine.Streaming.Session.recv(session, {:until, "got: alpha\n"}, timeout: 5_000)
+        Docker.Streaming.Session.recv(session, {:until, "got: alpha\n"}, timeout: 5_000)
 
       assert String.ends_with?(output, "got: alpha\n")
       assert session.buffer === ""
 
-      :ok = Docker.Engine.Streaming.Session.close(session)
+      Docker.Streaming.Session.close(session)
     end
 
     test "tty container attach uses raw stream (no multiplex framing)", %{image_tag: image_tag} do
@@ -152,6 +152,7 @@ defmodule Docker.Engine.Streaming.SessionTest do
         Docker.create_container(
           container_name,
           image_tag,
+          %{},
           auto_remove: false,
           interactive_shell: true
         )
@@ -165,14 +166,14 @@ defmodule Docker.Engine.Streaming.SessionTest do
       assert session.tty === true
 
       {:ok, _initial, session} =
-        Docker.Engine.Streaming.Session.recv(session, {:idle_timeout, 200})
+        Docker.Streaming.Session.recv(session, {:idle_timeout, 200})
 
-      :ok = Docker.Engine.Streaming.Session.send(session, "echo from-tty\n")
+      Docker.Streaming.Session.send(session, "echo from-tty\n")
 
-      {:ok, output, session} = Docker.Engine.Streaming.Session.recv(session, {:idle_timeout, 500})
+      {:ok, output, session} = Docker.Streaming.Session.recv(session, {:idle_timeout, 500})
       assert String.contains?(output, "from-tty")
 
-      :ok = Docker.Engine.Streaming.Session.close(session)
+      Docker.Streaming.Session.close(session)
     end
   end
 
@@ -182,12 +183,12 @@ defmodule Docker.Engine.Streaming.SessionTest do
       container_id = create_running_container(container_name, image_tag)
 
       {:ok, session} = Docker.exec_session(container_id, ["cat"])
-      :ok = Docker.Engine.Streaming.Session.send(session, "ping\n")
+      Docker.Streaming.Session.send(session, "ping\n")
 
-      {:ok, output, session} = Docker.Engine.Streaming.Session.recv(session, {:idle_timeout, 500})
+      {:ok, output, session} = Docker.Streaming.Session.recv(session, {:idle_timeout, 500})
       assert String.contains?(output, "ping")
 
-      :ok = Docker.Engine.Streaming.Session.close(session)
+      Docker.Streaming.Session.close(session)
     end
 
     test "split: true returns stdout and stderr separately", %{image_tag: image_tag} do
@@ -198,7 +199,7 @@ defmodule Docker.Engine.Streaming.SessionTest do
         Docker.exec_session(container_id, ["sh", "-c", "echo out; echo err 1>&2"])
 
       {:ok, {stdout, stderr}, _session} =
-        Docker.Engine.Streaming.Session.recv(session, {:idle_timeout, 500}, split: true)
+        Docker.Streaming.Session.recv(session, {:idle_timeout, 500}, split: true)
 
       assert stdout === "out\n"
       assert stderr === "err\n"
@@ -213,7 +214,7 @@ defmodule Docker.Engine.Streaming.SessionTest do
       {:ok, session} = Docker.exec_session(container_id, ["sh", "-c", "echo done"])
 
       assert {:error, :closed_before_delimiter, _session} =
-               Docker.Engine.Streaming.Session.recv(session, {:until, "FOREVER"}, timeout: 2_000)
+               Docker.Streaming.Session.recv(session, {:until, "FOREVER"}, timeout: 2_000)
     end
   end
 
@@ -235,6 +236,7 @@ defmodule Docker.Engine.Streaming.SessionTest do
       Docker.create_container(
         container_name,
         image_tag,
+        %{},
         auto_remove: false,
         open_stdin: true,
         cmd: ["repl"]
@@ -259,6 +261,7 @@ defmodule Docker.Engine.Streaming.SessionTest do
       Docker.create_container(
         container_name,
         image_tag,
+        %{},
         auto_remove: false,
         interactive_shell: true
       )

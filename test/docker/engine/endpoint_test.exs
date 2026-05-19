@@ -1,8 +1,8 @@
-defmodule Docker.Engine.EndpointTest do
+defmodule Docker.EndpointTest do
   use ExUnit.Case
 
-  alias Docker.Engine.Endpoint, as: EngineEndpoint
-  alias Sorrel.Endpoint, as: MintyEndpoint
+  alias Docker.Endpoint, as: EngineEndpoint
+  alias OneOhOne.Endpoint, as: MintyEndpoint
 
   # ---------------------------------------------------------------------------
   # Per-test isolation of System env vars.
@@ -87,7 +87,7 @@ defmodule Docker.Engine.EndpointTest do
       try do
         assert {:ok, ep} = EngineEndpoint.from_options([])
         assert ep.minty.transport === :unix
-        assert ep.minty.socket_path === Path.expand("~/.docker/run/docker.sock")
+        assert ep.minty.socket_path === desktop_sock
       after
         if saved_home do
           System.put_env("HOME", saved_home)
@@ -257,14 +257,12 @@ defmodule Docker.Engine.EndpointTest do
   # ===========================================================================
 
   describe "from_options/1 error cases" do
-    test "ssh:// in options[:host] surfaces the underlying Sorrel parse error" do
-      # ssh:// URLs are now accepted by the underlying Sorrel parser, but the
-      # URL alone is not enough — the caller must supply a `:target` option
-      # (and optionally `:ssh`, `:user`) to Sorrel. Engine.Endpoint does not
-      # forward those options today, so the parse always sees a missing
-      # target. This test pins the error shape callers see: a structured
-      # {:invalid_url, :missing_ssh_target} tuple, not the old blanket
-      # `:ssh_not_supported`.
+    test "ssh:// in options[:host] returns :missing_ssh_target" do
+      # ssh:// URLs need a :target (and auth/verify) we can't derive from a
+      # bare URL string. Callers that need an SSH-backed engine endpoint
+      # must build a %Docker.Endpoint{} directly (wrapping a
+      # pre-built %OneOhOne.Endpoint{transport: :ssh, ...}) and pass it via
+      # options[:endpoint]. This test pins the error shape callers see.
       assert EngineEndpoint.from_options(host: "ssh://me@h") ===
                {:error, {:invalid_url, :missing_ssh_target}}
     end
@@ -297,14 +295,14 @@ defmodule Docker.Engine.EndpointTest do
   # ===========================================================================
 
   describe "to_minty/1" do
-    test "returns the wrapped Sorrel endpoint" do
+    test "returns the wrapped OneOhOne endpoint" do
       minty = %MintyEndpoint{transport: :unix, socket_path: "/x"}
       ep = %EngineEndpoint{minty: minty, version: "1.45"}
 
       assert EngineEndpoint.to_minty(ep) === minty
     end
 
-    test "the returned Sorrel endpoint has no :version field" do
+    test "the returned OneOhOne endpoint has no :version field" do
       assert {:ok, ep} = EngineEndpoint.from_options(socket: "/tmp/d.sock")
       minty = EngineEndpoint.to_minty(ep)
 
