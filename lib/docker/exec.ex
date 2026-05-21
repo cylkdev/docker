@@ -24,7 +24,7 @@ defmodule Docker.Exec do
   """
 
   alias Docker.Client
-  alias ExUtils.Serializer
+  alias Docker.Serializer
 
   @doc """
   Creates an exec instance in a running container but does not start it yet.
@@ -192,7 +192,7 @@ defmodule Docker.Exec do
 
     case Client.request(:get, url, nil, options) do
       {:ok, %{status: code, body: body}} when code in 200..299 ->
-        {:ok, Serializer.deserialize(body)}
+        {:ok, Serializer.deserialize(body, options)}
 
       {:ok, %{status: code, body: body}} ->
         {:error, %{status: code, body: body}}

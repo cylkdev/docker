@@ -105,7 +105,10 @@ defmodule Docker.TerminalTest do
       {:ok, _} = Docker.start_container(container_name)
 
       assert {:ok, _state} = Terminal.open(container_name, shell: ["/repl.sh"])
-      assert {:error, {:already_started, pid}} = Terminal.open(container_name, shell: ["/repl.sh"])
+
+      assert {:error, {:already_started, pid}} =
+               Terminal.open(container_name, shell: ["/repl.sh"])
+
       assert is_pid(pid)
 
       assert :ok = Terminal.close(container_name)

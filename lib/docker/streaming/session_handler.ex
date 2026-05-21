@@ -48,6 +48,7 @@ defmodule Docker.Streaming.SessionHandler do
       @logger_prefix,
       "Handling incoming data | transport_pid=#{inspect(transport_pid)}, bytes_size=#{byte_size(bytes)}"
     )
+
     forward(socket, {:docker_stream, transport_pid, :data, bytes})
     {:ok, socket}
   end
@@ -58,6 +59,7 @@ defmodule Docker.Streaming.SessionHandler do
       @logger_prefix,
       "Terminating session | transport_pid=#{inspect(transport_pid)}"
     )
+
     forward(socket, {:docker_stream, transport_pid, :closed})
     :ok
   end

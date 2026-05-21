@@ -176,7 +176,7 @@ defmodule Docker.Network do
       "Labels" => labels
     }
 
-    payload =  put_network_ipam(payload, options)
+    payload = put_network_ipam(payload, options)
 
     case Client.request(:post, url, {:json, payload}, options) do
       {:ok, %{status: code, body: %{"Id" => id}}} when code in 200..299 ->

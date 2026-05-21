@@ -82,8 +82,7 @@ defmodule Docker.Terminal.Server do
       {:ok, session} ->
         ref = monitor_transport(session)
 
-        {:ok,
-         %{name: container_name, session: session, defaults: defaults, socket_ref: ref}}
+        {:ok, %{name: container_name, session: session, defaults: defaults, socket_ref: ref}}
 
       {:error, reason} ->
         {:stop, reason}

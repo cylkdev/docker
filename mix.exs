@@ -53,8 +53,9 @@ defmodule Docker.MixProject do
       # ---
       {:req, "~> 0.5"},
       {:elixir_exec, github: "cylkdev/elixir_exec", branch: "main"},
-      {:ex_utils, github: "cylkdev/ex_utils", branch: "main"},
-      {:oneoone, github: "cylkdev/oneoone", branch: "main"}
+      {:oneoone, github: "cylkdev/oneoone", branch: "main"},
+      {:nimble_options, "~> 1.1"},
+      {:recase, "~> 0.9"}
     ]
   end
 

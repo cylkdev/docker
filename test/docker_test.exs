@@ -433,7 +433,13 @@ defmodule DockerTest do
       ])
 
       assert {:ok, stream} =
-               Docker.build_image("examples/busybox-example", "Dockerfile", "docker-test:tiny", %{}, @sandbox)
+               Docker.build_image(
+                 "examples/busybox-example",
+                 "Dockerfile",
+                 "docker-test:tiny",
+                 %{},
+                 @sandbox
+               )
 
       assert events === Enum.to_list(stream)
     end
