@@ -27,11 +27,25 @@ defmodule Docker.Session do
   @spec exec_session(Docker.container_ref(), [binary()], Docker.options()) ::
           Docker.result(Session.t())
   def exec_session(container_ref, cmd, options \\ []) when is_list(cmd) do
+    with {:ok, session, _exec_id} <- exec_session_with_id(container_ref, cmd, options) do
+      {:ok, session}
+    end
+  end
+
+  @doc """
+  Like `exec_session/3`, but also returns the exec instance id so callers
+  can drive control-plane operations (e.g. TTY resize) alongside the
+  streaming session.
+  """
+  @spec exec_session_with_id(Docker.container_ref(), [binary()], Docker.options()) ::
+          {:ok, Docker.Streaming.Session.t(), binary()} | {:error, term()}
+  def exec_session_with_id(container_ref, cmd, options \\ []) when is_list(cmd) do
     tty = Keyword.get(options, :tty, false)
     create_options = options |> Keyword.put(:attach_stdin, true) |> Keyword.put(:tty, tty)
 
-    with {:ok, exec_id} <- Docker.Exec.exec_create(container_ref, cmd, create_options) do
-      Streaming.open_exec_start(exec_id, tty, options)
+    with {:ok, exec_id} <- Docker.Exec.exec_create(container_ref, cmd, create_options),
+         {:ok, session} <- Streaming.open_exec_start(exec_id, tty, options) do
+      {:ok, session, exec_id}
     end
   end
 

@@ -41,6 +41,7 @@ defmodule Docker.Terminal do
   alias Docker.Exec
   alias Docker.Streaming.Session
   alias Docker.Terminal.Controller
+  alias Docker.Terminal.Handle
   alias Docker.Terminal.Server
 
   @typedoc """
@@ -169,15 +170,40 @@ defmodule Docker.Terminal do
 
   def close(%Session{} = session), do: Controller.close(session)
 
+  def close(%Handle{stream: stream}), do: Controller.close(stream)
+
+  @doc """
+  Opens an interactive exec inline (the CALLER owns the stream messages) and
+  returns a `Docker.Terminal.Handle`. Use this for interactive attach; the
+  Server-based `open/2` is for the persistent, name-based request/reply path.
+  """
+  @doc since: "0.1.0"
+  @spec open_pty(Docker.container_ref(), keyword()) :: {:ok, Handle.t()} | {:error, term()}
+  def open_pty(container_ref, opts \\ []) when is_binary(container_ref) and is_list(opts) do
+    with {:ok, session, exec_id} <- Controller.open(container_ref, opts) do
+      {:ok, %Handle{stream: session, exec_id: exec_id, opts: docker_opts(opts)}}
+    end
+  end
+
+  # Keep only the daemon-selection opts for later control-plane calls.
+  defp docker_opts(opts), do: Keyword.take(opts, [:socket, :host, :json])
+
   @doc """
   Resizes the TTY of an open session to `{rows, cols}`.
 
-  Requires a `Docker.Streaming.Session.t/0` handle (opened from an exec); a
-  name/ref handle cannot be resized and returns `{:error, :resize_requires_session}`.
+  Requires a `Docker.Terminal.Handle.t/0` (opened from an exec via
+  `open_pty/2`); a name/ref handle cannot be resized and returns
+  `{:error, :resize_requires_session}`.
   """
   @doc since: "0.1.0"
-  @spec resize(handle(), {pos_integer(), pos_integer()}) :: :ok | {:error, term()}
-  def resize(%Session{} = session, size), do: Session.resize(session, size)
+  @spec resize(Handle.t() | handle(), {pos_integer(), pos_integer()}) :: :ok | {:error, term()}
+  def resize(%Handle{exec_id: nil}, _size), do: {:error, :no_exec_id}
+
+  def resize(%Handle{exec_id: exec_id, opts: opts}, {rows, cols})
+      when is_integer(rows) and is_integer(cols) do
+    Docker.Exec.resize(exec_id, rows, cols, opts)
+  end
+
   def resize(name, _size) when is_binary(name), do: {:error, :resize_requires_session}
 
   # ---------------------------------------------------------------------------

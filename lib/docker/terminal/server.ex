@@ -79,7 +79,7 @@ defmodule Docker.Terminal.Server do
     {defaults, exec_opts} = Keyword.split(open_opts, @default_keys)
 
     case Controller.open(container_name, exec_opts) do
-      {:ok, session} ->
+      {:ok, session, _exec_id} ->
         ref = monitor_transport(session)
 
         {:ok, %{name: container_name, session: session, defaults: defaults, socket_ref: ref}}
