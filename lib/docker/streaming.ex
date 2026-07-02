@@ -36,7 +36,7 @@ defmodule Docker.Streaming do
       when is_binary(container_ref) and is_boolean(tty) and is_list(opts) do
     with {:ok, engine_endpoint} <- Endpoint.from_options(opts) do
       path = build_attach_path(container_ref, engine_endpoint, opts)
-      open_upgrade(engine_endpoint, :post, path, "", tty, opts)
+      open_upgrade(engine_endpoint, :post, path, "", tty, nil, opts)
     end
   end
 
@@ -51,11 +51,11 @@ defmodule Docker.Streaming do
       encoder = opts[:json][:protocol_encode] || (&JSON.protocol_encode/2)
       body = JSON.encode!(%{"Detach" => false, "Tty" => tty}, encoder)
       path = "/v#{Endpoint.version(engine_endpoint)}/exec/#{exec_id}/start"
-      open_upgrade(engine_endpoint, :post, path, body, tty, opts)
+      open_upgrade(engine_endpoint, :post, path, body, tty, exec_id, opts)
     end
   end
 
-  defp open_upgrade(engine_endpoint, method, path, body, tty, _opts) do
+  defp open_upgrade(engine_endpoint, method, path, body, tty, exec_id, opts) do
     minty = Endpoint.to_minty(engine_endpoint)
 
     upgrade = %{
@@ -72,7 +72,7 @@ defmodule Docker.Streaming do
 
     case OneOhOne.start_link(SessionHandler, start_opts) do
       {:ok, conn_pid} ->
-        {:ok, Session.from_connection(conn_pid, tty)}
+        {:ok, Session.from_connection(conn_pid, tty, exec_id, opts)}
 
       {:error, reason} ->
         {:error, reason}

@@ -309,6 +309,29 @@ defmodule Docker.Exec do
     end
   end
 
+  @doc """
+  Resizes the TTY of a running exec instance to `rows` x `cols`.
+
+  Sends `POST /exec/{id}/resize?h={rows}&w={cols}` with an empty body. The exec
+  must have been created with `Tty: true` and be running.
+  """
+  @spec resize(Docker.exec_id(), pos_integer(), pos_integer(), Docker.options()) ::
+          :ok | {:error, term()}
+  def resize(exec_id, rows, cols, options \\ [])
+      when is_binary(exec_id) and is_integer(rows) and is_integer(cols) do
+    case Client.request(:post, resize_path(exec_id, rows, cols), nil, options) do
+      {:ok, %{status: code}} when code in 200..299 -> :ok
+      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc false
+  @spec resize_path(binary(), pos_integer(), pos_integer()) :: String.t()
+  def resize_path(exec_id, rows, cols) do
+    "/exec/#{exec_id}/resize?" <> URI.encode_query(%{"h" => rows, "w" => cols})
+  end
+
   defp put_exec_option_if_present(payload, _key, nil), do: payload
   defp put_exec_option_if_present(payload, _key, []), do: payload
   defp put_exec_option_if_present(payload, key, value), do: Map.put(payload, key, value)

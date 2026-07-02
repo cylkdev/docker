@@ -169,6 +169,17 @@ defmodule Docker.Terminal do
 
   def close(%Session{} = session), do: Controller.close(session)
 
+  @doc """
+  Resizes the TTY of an open session to `{rows, cols}`.
+
+  Requires a `Docker.Streaming.Session.t/0` handle (opened from an exec); a
+  name/ref handle cannot be resized and returns `{:error, :resize_requires_session}`.
+  """
+  @doc since: "0.1.0"
+  @spec resize(handle(), {pos_integer(), pos_integer()}) :: :ok | {:error, term()}
+  def resize(%Session{} = session, size), do: Session.resize(session, size)
+  def resize(name, _size) when is_binary(name), do: {:error, :resize_requires_session}
+
   # ---------------------------------------------------------------------------
   # INTERNAL
   # ---------------------------------------------------------------------------

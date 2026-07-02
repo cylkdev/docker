@@ -72,6 +72,8 @@ defmodule Docker.Streaming.Session do
 
   defstruct socket: nil,
             tty: false,
+            exec_id: nil,
+            opts: [],
             buffer: "",
             stderr_buffer: "",
             frame_buffer: "",
@@ -103,9 +105,10 @@ defmodule Docker.Streaming.Session do
   No leftover bytes — the handshake handshake belongs to OneOhOne and
   any post-handshake bytes arrive via the handler protocol.
   """
-  @spec from_connection(pid(), boolean()) :: t()
-  def from_connection(conn_pid, tty) when is_pid(conn_pid) and is_boolean(tty) do
-    %__MODULE__{socket: conn_pid, tty: tty}
+  @spec from_connection(pid(), boolean(), binary() | nil, keyword()) :: t()
+  def from_connection(conn_pid, tty, exec_id \\ nil, opts \\ [])
+      when is_pid(conn_pid) and is_boolean(tty) do
+    %__MODULE__{socket: conn_pid, tty: tty, exec_id: exec_id, opts: opts}
   end
 
   @doc """
@@ -114,6 +117,20 @@ defmodule Docker.Streaming.Session do
   @spec send(t(), iodata()) :: :ok | {:error, term()}
   def send(%__MODULE__{closed: true}, _data), do: {:error, :closed}
   def send(%__MODULE__{socket: socket}, data), do: transport_send(socket, data)
+
+  @doc """
+  Resizes the exec's TTY to `{rows, cols}`.
+
+  Requires a session opened from an exec (one that carries an `exec_id`);
+  returns `{:error, :no_exec_id}` otherwise.
+  """
+  @spec resize(t(), {pos_integer(), pos_integer()}) :: :ok | {:error, term()}
+  def resize(%__MODULE__{exec_id: nil}, _size), do: {:error, :no_exec_id}
+
+  def resize(%__MODULE__{exec_id: exec_id, opts: opts}, {rows, cols})
+      when is_integer(rows) and is_integer(cols) do
+    Docker.Exec.resize(exec_id, rows, cols, opts)
+  end
 
   @doc """
   Returns bytes from the session under a termination condition.
