@@ -122,7 +122,7 @@ defmodule Docker.TerminalTest do
       on_exit(fn -> Docker.delete_container(container_name, %{force: true}) end)
       {:ok, _} = Docker.start_container(container_name)
 
-      assert {:ok, state, _exec_id} = Docker.Terminal.Controller.open(container_name, shell: ["/repl.sh"])
+      assert {:ok, state} = Docker.Terminal.Controller.open(container_name, shell: ["/repl.sh"])
       assert {:ok, {reply, state}} = Terminal.command(state, "hi")
       assert String.contains?(reply, "got: hi")
       assert :ok = Terminal.close(state)

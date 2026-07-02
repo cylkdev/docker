@@ -41,9 +41,7 @@ defmodule Docker.Terminal do
   alias Docker.Exec
   alias Docker.Streaming.Session
   alias Docker.Terminal.Controller
-  alias Docker.Terminal.Handle
   alias Docker.Terminal.Server
-  alias Docker.Terminal.{Pty, RawMode}
 
   @typedoc """
   A handle to a persistent session — either the container name (when
@@ -170,80 +168,6 @@ defmodule Docker.Terminal do
   end
 
   def close(%Session{} = session), do: Controller.close(session)
-
-  def close(%Handle{stream: stream}), do: Controller.close(stream)
-
-  @doc """
-  Opens an interactive exec inline (the CALLER owns the stream messages) and
-  returns a `Docker.Terminal.Handle`. Use this for interactive attach; the
-  Server-based `open/2` is for the persistent, name-based request/reply path.
-  """
-  @doc since: "0.1.0"
-  @spec open_pty(Docker.container_ref(), keyword()) :: {:ok, Handle.t()} | {:error, term()}
-  def open_pty(container_ref, opts \\ []) when is_binary(container_ref) and is_list(opts) do
-    with {:ok, session, exec_id} <- Controller.open(container_ref, opts) do
-      {:ok, %Handle{stream: session, exec_id: exec_id, opts: docker_opts(opts)}}
-    end
-  end
-
-  # Keep only the daemon-selection opts for later control-plane calls.
-  defp docker_opts(opts), do: Keyword.take(opts, [:socket, :host, :json])
-
-  @doc """
-  Resizes the TTY of an open session to `{rows, cols}`.
-
-  Requires a `Docker.Terminal.Handle.t/0` (opened from an exec via
-  `open_pty/2`); a name/ref handle cannot be resized and returns
-  `{:error, :resize_requires_session}`.
-  """
-  @doc since: "0.1.0"
-  @spec resize(Handle.t() | handle(), {pos_integer(), pos_integer()}) :: :ok | {:error, term()}
-  def resize(%Handle{exec_id: nil}, _size), do: {:error, :no_exec_id}
-
-  def resize(%Handle{exec_id: exec_id, opts: opts}, {rows, cols})
-      when is_integer(rows) and is_integer(cols) do
-    Docker.Exec.resize(exec_id, rows, cols, opts)
-  end
-
-  def resize(name, _size) when is_binary(name), do: {:error, :resize_requires_session}
-
-  @doc """
-  Attaches the CALLER's local terminal to an interactive `tty:true` exec: opens
-  inline (caller owns the stream), enables raw mode, sets the initial size, pumps
-  bytes both ways, resizes on SIGWINCH, and restores the terminal on any exit.
-  Blocks until the program exits. `opts[:shell]` selects the program (defaults to
-  the container's configured program). Returns `{:error, :not_a_tty}` when raw
-  mode cannot engage.
-  """
-  @spec attach(Docker.container_ref(), keyword()) :: :ok | {:error, term()}
-  def attach(container_ref, opts \\ []) when is_binary(container_ref) and is_list(opts) do
-    case RawMode.enable() do
-      {:ok, saved} ->
-        System.at_exit(fn _ -> RawMode.restore(saved) end)
-
-        try do
-          attach_session(container_ref, opts)
-        after
-          RawMode.restore(saved)
-        end
-
-      {:error, _reason} ->
-        {:error, :not_a_tty}
-    end
-  end
-
-  defp attach_session(container_ref, opts) do
-    with {:ok, handle} <- open_pty(container_ref, Keyword.put_new(opts, :tty, true)) do
-      case RawMode.size() do
-        {:ok, size} -> _ = resize(handle, size)
-        _ -> :ok
-      end
-
-      result = Pty.attach(handle)
-      close(handle)
-      result
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # INTERNAL

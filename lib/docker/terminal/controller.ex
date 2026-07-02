@@ -50,12 +50,12 @@ defmodule Docker.Terminal.Controller do
   """
   @doc since: "0.1.0"
   @spec open(Docker.container_ref(), keyword()) ::
-          {:ok, Session.t(), binary()} | {:error, term()}
+          {:ok, Session.t()} | {:error, term()}
   def open(container_ref, opts \\ []) when is_binary(container_ref) and is_list(opts) do
     {shell, exec_opts} = Keyword.pop(opts, :shell, ["/bin/sh"])
     exec_opts = Keyword.put_new(exec_opts, :tty, true)
 
-    Docker.Session.exec_session_with_id(container_ref, shell, exec_opts)
+    Docker.Session.exec_session(container_ref, shell, exec_opts)
   end
 
   @doc """
