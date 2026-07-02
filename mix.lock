@@ -8,6 +8,7 @@
   "dialyxir": {:hex, :dialyxir, "1.4.7", "dda948fcee52962e4b6c5b4b16b2d8fa7d50d8645bbae8b8685c3f9ecb7f5f4d", [:mix], [{:erlex, ">= 0.2.8", [hex: :erlex, repo: "hexpm", optional: false]}], "hexpm", "b34527202e6eb8cee198efec110996c25c5898f43a4094df157f8d28f27d9efe"},
   "earmark_parser": {:hex, :earmark_parser, "1.4.44", "f20830dd6b5c77afe2b063777ddbbff09f9759396500cdbe7523efd58d7a339c", [:mix], [], "hexpm", "4778ac752b4701a5599215f7030989c989ffdc4f6df457c5f36938cc2d2a2750"},
   "elixir_exec": {:git, "https://github.com/cylkdev/elixir_exec.git", "98e4218593fa7cda7e9ee502dc7866a2d44efc99", [branch: "main"]},
+  "elixir_make": {:hex, :elixir_make, "0.10.0", "16577e2583a79bb79237bbff349619ef5d80afffc07eac6e4faf0d00e2ddaf7d", [:mix], [], "hexpm", "dc1f09fb7fa68866b886abd5f0f3c83553b1a19a52359a899e92af1bb3b31982"},
   "erlex": {:hex, :erlex, "0.2.8", "cd8116f20f3c0afe376d1e8d1f0ae2452337729f68be016ea544a72f767d9c12", [:mix], [], "hexpm", "9d66ff9fedf69e49dc3fd12831e12a8a37b76f8651dd21cd45fcf5561a8a7590"},
   "erlexec": {:hex, :erlexec, "2.3.0", "90dff0f8974c71e85325c277d81855a7ac2882ce43ce4110d227d1e91c4f1b37", [:rebar3], [], "hexpm", "2cf7dcb67c91dce78c31efdf08de8bd103dd7c8a297d20db1b76dfc00b5a5a24"},
   "error_message": {:hex, :error_message, "0.3.3", "493b6edae73a438647db843a4ba3e2a45baeff4c0c94236fca7f77e2ada2806a", [:mix], [{:jason, ">= 1.0.0", [hex: :jason, repo: "hexpm", optional: true]}, {:plug, "~> 1.13", [hex: :plug, repo: "hexpm", optional: false]}], "hexpm", "671a0a78708b299d119acdadc5f771c8c3cc4b171a9562745936bfe117674b73"},

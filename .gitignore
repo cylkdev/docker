@@ -35,3 +35,4 @@ dialyzer/
 TODO.md
 RULES.md
 NOTES.md
+priv/docker_termios.so
