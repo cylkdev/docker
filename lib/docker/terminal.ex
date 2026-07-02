@@ -43,6 +43,7 @@ defmodule Docker.Terminal do
   alias Docker.Terminal.Controller
   alias Docker.Terminal.Handle
   alias Docker.Terminal.Server
+  alias Docker.Terminal.{Pty, RawMode}
 
   @typedoc """
   A handle to a persistent session — either the container name (when
@@ -205,6 +206,44 @@ defmodule Docker.Terminal do
   end
 
   def resize(name, _size) when is_binary(name), do: {:error, :resize_requires_session}
+
+  @doc """
+  Attaches the CALLER's local terminal to an interactive `tty:true` exec: opens
+  inline (caller owns the stream), enables raw mode, sets the initial size, pumps
+  bytes both ways, resizes on SIGWINCH, and restores the terminal on any exit.
+  Blocks until the program exits. `opts[:shell]` selects the program (defaults to
+  the container's configured program). Returns `{:error, :not_a_tty}` when raw
+  mode cannot engage.
+  """
+  @spec attach(Docker.container_ref(), keyword()) :: :ok | {:error, term()}
+  def attach(container_ref, opts \\ []) when is_binary(container_ref) and is_list(opts) do
+    case RawMode.enable() do
+      {:ok, saved} ->
+        System.at_exit(fn _ -> RawMode.restore(saved) end)
+
+        try do
+          attach_session(container_ref, opts)
+        after
+          RawMode.restore(saved)
+        end
+
+      {:error, _reason} ->
+        {:error, :not_a_tty}
+    end
+  end
+
+  defp attach_session(container_ref, opts) do
+    with {:ok, handle} <- open_pty(container_ref, Keyword.put_new(opts, :tty, true)) do
+      case RawMode.size() do
+        {:ok, size} -> _ = resize(handle, size)
+        _ -> :ok
+      end
+
+      result = Pty.attach(handle)
+      close(handle)
+      result
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # INTERNAL
