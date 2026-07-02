@@ -8,9 +8,6 @@ defmodule Docker.MixProject do
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
-      compilers: [:elixir_make] ++ Mix.compilers(),
-      make_targets: ["all"],
-      make_clean: ["clean"],
       deps: deps(),
       test_coverage: [tool: ExCoveralls],
       preferred_cli_env: [
@@ -58,8 +55,7 @@ defmodule Docker.MixProject do
       {:elixir_exec, github: "cylkdev/elixir_exec", branch: "main"},
       {:oneoone, github: "cylkdev/oneoone", branch: "main"},
       {:nimble_options, "~> 1.1"},
-      {:recase, "~> 0.9"},
-      {:elixir_make, "~> 0.8", runtime: false}
+      {:recase, "~> 0.9"}
     ]
   end
 
