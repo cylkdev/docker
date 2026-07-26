@@ -501,22 +501,12 @@ defmodule Docker.Image do
             ["-C", context_path, "-cf", "-", "."]
         end
 
-      case run_cmd("tar", args) do
+      case System.cmd("tar", args) do
         {output, 0} -> {:ok, output}
         {error, code} -> {:error, %{status: code, error: error}}
       end
     else
       {:error, :invalid_context_path}
-    end
-  end
-
-  defp run_cmd(executable, args) do
-    case ElixirExec.run([executable | args], sync: true, stdout: true) do
-      {:ok, %ElixirExec.Output{stdout: chunks}} ->
-        {IO.iodata_to_binary(chunks), 0}
-
-      {:error, reason} ->
-        {inspect(reason), 1}
     end
   end
 

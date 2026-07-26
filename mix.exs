@@ -52,7 +52,6 @@ defmodule Docker.MixProject do
       {:sandbox_registry, "~> 0.1", only: [:dev, :test]},
       # ---
       {:req, "~> 0.5"},
-      {:elixir_exec, github: "cylkdev/elixir_exec", branch: "main"},
       {:oneoone, github: "cylkdev/oneoone", branch: "main"},
       {:nimble_options, "~> 1.1"},
       {:recase, "~> 0.9"}
