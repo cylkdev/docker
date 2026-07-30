@@ -145,7 +145,7 @@ defmodule Docker.Strings do
       try do
         {:ok, String.to_existing_atom(key)}
       rescue
-        _ -> :error
+        ArgumentError -> :error
       end
     else
       case get_atomizable_keys(opts) do

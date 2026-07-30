@@ -173,18 +173,13 @@ defmodule Docker.Container do
         params
 
       labels when is_list(labels) ->
-        unless Enum.all?(labels, &is_binary/1) do
-          raise "Expected labels to be a list of strings, got: #{inspect(labels)}"
-        end
-
         params
         |> Map.delete("filters")
-        |> Map.put(:filters, JSON.encode!(%{"label" => labels}))
-
-      other ->
-        raise "Expected labels to be a list of strings, got: #{inspect(other)}"
+        |> Map.put(:filters, JSON.encode!(%{"label" => Enum.map(labels, &label!/1)}))
     end
   end
+
+  defp label!(label) when is_binary(label), do: label
 
   defp do_list_containers(params, options) do
     url = Util.append_query_string("/containers/json", params)
@@ -632,8 +627,10 @@ defmodule Docker.Container do
   Queries the daemon for the current state of a container and returns
   `true` if it is running.
 
-  Returns `false` if the container is stopped, does not exist, or cannot be
-  reached. For a version that takes an already-fetched container map, use
+  Returns `false` if the container is stopped or does not exist. Raises if
+  the daemon cannot be reached — an unreachable daemon says nothing about
+  whether the container is running, so it is not reported as `false`. For a
+  version that takes an already-fetched container map, use
   `container_running?/1`.
 
   ## Parameters
@@ -652,7 +649,7 @@ defmodule Docker.Container do
     else
       case find_container(container_ref, options) do
         {:ok, container} -> container_running?(container)
-        _other -> false
+        {:error, %{status: 404}} -> false
       end
     end
   end
@@ -661,20 +658,13 @@ defmodule Docker.Container do
     case Keyword.get(options, :cmd) do
       nil -> base_params
       cmd when is_list(cmd) -> Map.put(base_params, "Cmd", cmd)
-      other -> raise "Expected cmd to be a list, got: #{inspect(other)}"
     end
   end
 
   defp maybe_put_container_env(base_params, options) do
     case Keyword.get(options, :env) do
-      nil ->
-        base_params
-
-      env when is_list(env) ->
-        Map.put(base_params, "Env", env)
-
-      other ->
-        raise "Expected env to be a list, got: #{inspect(other)}"
+      nil -> base_params
+      env when is_list(env) -> Map.put(base_params, "Env", env)
     end
   end
 
@@ -686,29 +676,15 @@ defmodule Docker.Container do
 
   defp maybe_put_host_binds(base_params, options) do
     case Keyword.get(options, :binds) do
-      nil ->
-        base_params
-
-      binds when is_list(binds) ->
-        host_config = Map.get(base_params, "HostConfig", %{})
-        Map.put(base_params, "HostConfig", Map.put(host_config, "Binds", binds))
-
-      other ->
-        raise "Expected binds to be a list, got: #{inspect(other)}"
+      nil -> base_params
+      binds when is_list(binds) -> put_host_config(base_params, "Binds", binds)
     end
   end
 
   defp maybe_put_mounts(base_params, options) do
     case Keyword.get(options, :mounts) do
-      nil ->
-        base_params
-
-      mounts when is_list(mounts) ->
-        host_config = Map.get(base_params, "HostConfig", %{})
-        Map.put(base_params, "HostConfig", Map.put(host_config, "Mounts", mounts))
-
-      other ->
-        raise "Expected mounts to be a list, got: #{inspect(other)}"
+      nil -> base_params
+      mounts when is_list(mounts) -> put_host_config(base_params, "Mounts", mounts)
     end
   end
 
@@ -720,16 +696,15 @@ defmodule Docker.Container do
 
   defp maybe_put_network_mode(base_params, options) do
     case Keyword.get(options, :network_mode) do
-      nil ->
-        base_params
-
-      mode when is_binary(mode) ->
-        host_config = Map.get(base_params, "HostConfig", %{})
-        Map.put(base_params, "HostConfig", Map.put(host_config, "NetworkMode", mode))
-
-      other ->
-        raise "Expected network_mode to be a string, got: #{inspect(other)}"
+      nil -> base_params
+      mode when is_binary(mode) -> put_host_config(base_params, "NetworkMode", mode)
     end
+  end
+
+  # "HostConfig" is always seeded by build_create_container_config/4.
+  defp put_host_config(base_params, key, value) do
+    host_config = Map.fetch!(base_params, "HostConfig")
+    Map.put(base_params, "HostConfig", Map.put(host_config, key, value))
   end
 
   defp maybe_put_networks(base_params, options) do
@@ -744,31 +719,17 @@ defmodule Docker.Container do
       networks when is_map(networks) ->
         endpoints = build_network_endpoints_from_map(networks)
         Map.put(base_params, "NetworkingConfig", %{"EndpointsConfig" => endpoints})
-
-      other ->
-        raise "Expected networks to be a list or map, got: #{inspect(other)}"
     end
   end
 
   defp build_network_endpoints_from_list(networks) do
-    networks
-    |> Enum.map(fn
-      name when is_binary(name) -> {name, %{}}
-      other -> raise "Expected networks entries to be strings, got: #{inspect(other)}"
-    end)
-    |> Map.new()
+    Map.new(networks, fn name when is_binary(name) -> {name, %{}} end)
   end
 
   defp build_network_endpoints_from_map(networks) do
-    networks
-    |> Enum.map(fn
-      {name, config} when is_binary(name) and is_map(config) ->
-        {name, config}
-
-      other ->
-        raise "Expected networks to be a map of name => config, got: #{inspect(other)}"
+    Map.new(networks, fn {name, config} when is_binary(name) and is_map(config) ->
+      {name, config}
     end)
-    |> Map.new()
   end
 
   defp maybe_put_open_stdin(base_params, options) do
@@ -800,16 +761,10 @@ defmodule Docker.Container do
     do: put_interactive_shell_cmd(base_params, [shell])
 
   defp apply_interactive_shell(base_params, [head | _rest] = cmd) when is_binary(head) do
-    if Enum.all?(cmd, &is_binary/1) do
-      put_interactive_shell_cmd(base_params, cmd)
-    else
-      raise "Expected interactive_shell to be a boolean, string, or non-empty list of strings, got: #{inspect(cmd)}"
-    end
+    put_interactive_shell_cmd(base_params, Enum.map(cmd, &shell_arg!/1))
   end
 
-  defp apply_interactive_shell(_base_params, other) do
-    raise "Expected interactive_shell to be a boolean, string, or non-empty list of strings, got: #{inspect(other)}"
-  end
+  defp shell_arg!(arg) when is_binary(arg), do: arg
 
   defp put_interactive_shell_cmd(base_params, cmd) do
     base_params
@@ -866,36 +821,24 @@ defmodule Docker.Container do
     options
     |> Keyword.get(:exposed_ports, [])
     |> Map.new(fn config ->
-      protocol = config.protocol
-      port = config.port
-
-      unless protocol in ["tcp", "udp"] do
-        raise "Expected protocol to be tcp or udp, got: #{inspect(protocol)}"
-      end
-
-      key = "#{Integer.to_string(port)}/#{protocol}"
-
-      {key, %{}}
+      {port_key(config.port, config.protocol), %{}}
     end)
   end
+
+  defp port_key(port, protocol) when protocol in ["tcp", "udp"],
+    do: "#{Integer.to_string(port)}/#{protocol}"
 
   defp build_port_bindings_spec(options) do
     options
     |> Keyword.get(:port_bindings, [])
     |> Enum.group_by(fn config -> {config.container.port, config.protocol} end)
     |> Map.new(fn {{container_port, protocol}, configs} ->
-      unless protocol in ["tcp", "udp"] do
-        raise "Expected protocol to be tcp or udp, got: #{inspect(protocol)}"
-      end
-
-      key = "#{Integer.to_string(container_port)}/#{protocol}"
-
       values =
         Enum.map(configs, fn config ->
           %{"HostPort" => Integer.to_string(config.host.port), "HostIp" => config.host.ip}
         end)
 
-      {key, values}
+      {port_key(container_port, protocol), values}
     end)
   end
 

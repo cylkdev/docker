@@ -29,9 +29,10 @@ defmodule Docker.FrameTest do
       assert Frame.demux(buf) === {"", "", buf}
     end
 
-    test "drops frames with unknown stream IDs" do
+    test "raises on frames with unknown stream IDs" do
       buf = <<7, 0, 0, 0, 0, 0, 0, 1, "x", 1, 0, 0, 0, 0, 0, 0, 1, "y">>
-      assert Frame.demux(buf) === {"y", "", ""}
+
+      assert_raise CaseClauseError, fn -> Frame.demux(buf) end
     end
 
     test "returns triple of empties for an empty buffer" do
@@ -73,9 +74,10 @@ defmodule Docker.FrameTest do
       assert Frame.decode_chunk(payload_chunk, header_only) === {[{:stdout, "hello"}], ""}
     end
 
-    test "drops frames with unknown stream IDs" do
+    test "raises on frames with unknown stream IDs" do
       buf = <<7, 0, 0, 0, 0, 0, 0, 1, "x", 1, 0, 0, 0, 0, 0, 0, 1, "y">>
-      assert Frame.decode_chunk(buf, "") === {[{:stdout, "y"}], ""}
+
+      assert_raise CaseClauseError, fn -> Frame.decode_chunk(buf, "") end
     end
 
     test "empty chunk plus empty buffer yields empty events and empty leftover" do

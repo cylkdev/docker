@@ -23,6 +23,10 @@ defmodule Docker.Streaming.SessionHandler do
 
   The handler stores the owner pid in `socket.assigns[:owner]` so it
   is available to every callback without re-reading params.
+
+  An owner pid is mandatory: `connect/2` matches only on
+  `%{owner: pid}`, so connecting without one raises rather than
+  producing a session whose bytes have nowhere to go.
   """
 
   use OneOhOne.Handler
@@ -35,11 +39,6 @@ defmodule Docker.Streaming.SessionHandler do
   def connect(%{owner: owner}, %Socket{} = socket) when is_pid(owner) do
     Docker.Log.debug(@logger_prefix, "Connecting session | owner=#{inspect(owner)}")
     {:ok, OneOhOne.assign(socket, :owner, owner)}
-  end
-
-  def connect(_params, %Socket{} = socket) do
-    Docker.Log.warning(@logger_prefix, "Connecting session without owner")
-    {:ok, socket}
   end
 
   @impl true
@@ -70,22 +69,7 @@ defmodule Docker.Streaming.SessionHandler do
       "Forwarding message | owner=#{inspect(owner)}, message=#{inspect(message)}"
     )
 
-    if Process.alive?(owner) do
-      send(owner, message)
-      Docker.Log.debug(@logger_prefix, "Message sent to owner: #{inspect(owner)}")
-    else
-      Docker.Log.warning(
-        @logger_prefix,
-        "Unable to forward message. Owner process #{inspect(owner)} is not alive."
-      )
-    end
-
-    :ok
-  end
-
-  defp forward(%Socket{} = socket, _message) do
-    Docker.Log.error(@logger_prefix, "No owner assigned to forward message")
-    Docker.Log.error(@logger_prefix, "Socket assigns: #{inspect(socket.assigns)}")
+    send(owner, message)
     :ok
   end
 end

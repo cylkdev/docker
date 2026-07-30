@@ -316,11 +316,11 @@ defmodule Docker.Image do
 
   ## Returns
 
-    - `:ok` — the build stream completed (successfully or with build
-      errors printed to stdout; this function does not inspect events
-      for failure).
+    - `:ok` — the build stream completed and the daemon reported no build
+      error.
     - `{:error, reason}` — `build_image/5` could not produce a stream
-      (context missing, daemon unreachable, etc.).
+      (context missing, daemon unreachable, etc.), or the daemon emitted
+      an `"error"` event mid-build (e.g. a failing `RUN` step).
 
   ## Examples
 
@@ -331,14 +331,19 @@ defmodule Docker.Image do
           :ok | {:error, term()}
   def run_build_image(context_path, dockerfile, tag, params \\ %{}, options \\ []) do
     with {:ok, stream} <- build_image(context_path, dockerfile, tag, params, options) do
-      stream
-      |> Stream.each(fn
-        %{"stream" => line} -> IO.write(line)
-        _ -> :ok
-      end)
-      |> Stream.run()
+      Enum.reduce_while(stream, :ok, &consume_build_event/2)
     end
   end
+
+  defp consume_build_event(%{"error" => message}, :ok), do: {:halt, {:error, message}}
+
+  defp consume_build_event(%{"stream" => line}, :ok) do
+    IO.write(line)
+    {:cont, :ok}
+  end
+
+  # "aux", "status", "progressDetail" and friends carry no build output.
+  defp consume_build_event(_event, :ok), do: {:cont, :ok}
 
   @doc """
   Returns an image if it is already present locally; otherwise builds or
@@ -435,14 +440,20 @@ defmodule Docker.Image do
     end
   end
 
+  # `build_image/5` wants the *full* "name:tag" for `?t=`, so an `image_ref`
+  # that already carries a tag is passed through whole. Splitting it is only
+  # a presence check: an untagged ref would build as ":latest" under the
+  # wrong name, so it is rejected instead.
   defp extract_tag(image_ref, params) do
-    {_image_ref, tag_or_nil} = split_image_ref_tag(image_ref)
-    tag = params[:tag] || params["tag"] || tag_or_nil
+    case params[:tag] || params["tag"] do
+      tag when is_binary(tag) and tag !== "" ->
+        {:ok, tag}
 
-    if is_binary(tag) and tag !== "" do
-      {:ok, tag}
-    else
-      {:error, :missing_tag}
+      nil ->
+        case split_image_ref_tag(image_ref) do
+          {_name, nil} -> {:error, :missing_tag}
+          {_name, _tag} -> {:ok, image_ref}
+        end
     end
   end
 
@@ -480,13 +491,16 @@ defmodule Docker.Image do
     end
   end
 
-  defp split_image_ref_tag(image_ref) when is_binary(image_ref) do
-    regex = ~r/^(?<name>.+)(?::(?<tag>[^\/:]+))?$/
+  # `name` is non-greedy so the trailing `:tag` group actually gets a
+  # chance to match; with a greedy `.+` it never does. `[^/:]+` keeps a
+  # registry port ("localhost:5000/app") from being read as a tag.
+  @image_ref_regex ~r{^(?<name>.+?)(?::(?<tag>[^/:]+))?$}
 
-    case Regex.named_captures(regex, image_ref) do
+  defp split_image_ref_tag(image_ref) when is_binary(image_ref) do
+    case Regex.named_captures(@image_ref_regex, image_ref) do
+      %{"name" => name, "tag" => ""} -> {name, nil}
       %{"name" => name, "tag" => tag} -> {name, tag}
-      %{"name" => name} -> {name, nil}
-      _ -> {image_ref, nil}
+      nil -> {image_ref, nil}
     end
   end
 

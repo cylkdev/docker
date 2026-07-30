@@ -224,7 +224,7 @@ defmodule FakeHttpServer do
   end
 
   defp close_listen_socket(:tls, ls) do
-    :ssl.close(ls)
+    :ok = :ssl.close(ls)
   end
 
   defp close_listen_socket(_other_transport, ls) do

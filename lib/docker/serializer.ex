@@ -341,7 +341,6 @@ defmodule Docker.Serializer do
 
   defp serialize_key_to_string(key) when is_atom(key), do: Atom.to_string(key)
   defp serialize_key_to_string(key) when is_binary(key), do: key
-  defp serialize_key_to_string(key), do: key
 
   defp dump_term!(val, opts) do
     case opts[:to_serial_term] do
@@ -351,7 +350,7 @@ defmodule Docker.Serializer do
       fun when is_function(fun, 2) ->
         fun.(val, opts)
 
-      mod when is_atom(mod) and not is_nil(mod) ->
+      mod when is_atom(mod) ->
         mod.to_serial_term(val, opts)
 
       {mod, fun} ->
@@ -493,7 +492,7 @@ defmodule Docker.Serializer do
   end
 
   defp apply_transform(val, {mod, fun})
-       when is_atom(mod) and not is_nil(mod) and (is_atom(fun) and not is_nil(fun)) do
+       when is_atom(mod) and is_atom(fun) do
     apply(mod, fun, [val])
   end
 

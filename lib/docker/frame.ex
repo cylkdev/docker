@@ -229,7 +229,6 @@ defmodule Docker.Frame do
     case stream do
       1 -> do_demux(remaining, out <> payload, err)
       2 -> do_demux(remaining, out, err <> payload)
-      _ -> do_demux(remaining, out, err)
     end
   end
 
@@ -344,7 +343,6 @@ defmodule Docker.Frame do
     case stream do
       1 -> do_decode_chunk(remaining, [{:stdout, payload} | acc])
       2 -> do_decode_chunk(remaining, [{:stderr, payload} | acc])
-      _other -> do_decode_chunk(remaining, acc)
     end
   end
 

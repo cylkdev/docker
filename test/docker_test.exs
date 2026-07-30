@@ -127,13 +127,13 @@ defmodule DockerTest do
     end
 
     test "raises when :labels is not a list" do
-      assert_raise RuntimeError, ~r/Expected labels to be a list of strings/, fn ->
+      assert_raise CaseClauseError, fn ->
         Docker.list_containers(%{}, Keyword.merge(@sandbox, labels: "raw"))
       end
     end
 
     test "raises when :labels contains non-strings" do
-      assert_raise RuntimeError, ~r/Expected labels to be a list of strings/, fn ->
+      assert_raise FunctionClauseError, fn ->
         Docker.list_containers(%{}, Keyword.merge(@sandbox, labels: [:not_a_string]))
       end
     end
@@ -460,6 +460,68 @@ defmodule DockerTest do
 
       assert {:error, :invalid_context_path} =
                Docker.build_image("/nope", "Dockerfile", "x:y", %{}, @sandbox)
+    end
+  end
+
+  describe "run_build_image/5" do
+    import ExUnit.CaptureIO
+
+    defp register_build_events(events) do
+      Sandbox.set_build_image_responses([
+        {~r/.*/, fn _ctx, _dockerfile, _tag, _params, _opts -> {:ok, events} end}
+      ])
+    end
+
+    test "writes stream output and returns :ok on a successful build" do
+      register_build_events([
+        %{"stream" => "Step 1/1 : FROM alpine\n"},
+        %{"aux" => %{"ID" => "sha256:deadbeef"}},
+        %{"stream" => "Successfully built deadbeef\n"}
+      ])
+
+      output =
+        capture_io(fn ->
+          assert :ok =
+                   Docker.run_build_image(
+                     "examples/busybox-example",
+                     "Dockerfile",
+                     "docker-test:tiny",
+                     %{},
+                     @sandbox
+                   )
+        end)
+
+      assert output === "Step 1/1 : FROM alpine\nSuccessfully built deadbeef\n"
+    end
+
+    test "returns {:error, message} when the daemon reports a build error" do
+      register_build_events([
+        %{"stream" => "Step 1/2 : FROM alpine\n"},
+        %{
+          "error" => "The command '/bin/sh -c exit 1' returned a non-zero code: 1",
+          "errorDetail" => %{"code" => 1}
+        }
+      ])
+
+      capture_io(fn ->
+        assert {:error, "The command '/bin/sh -c exit 1' returned a non-zero code: 1"} =
+                 Docker.run_build_image(
+                   "examples/busybox-example",
+                   "Dockerfile",
+                   "docker-test:tiny",
+                   %{},
+                   @sandbox
+                 )
+      end)
+    end
+
+    test "propagates a build_image/5 error without consuming a stream" do
+      Sandbox.set_build_image_responses([
+        {~r/.*/, fn _ctx, _dockerfile, _tag, _params, _opts -> {:error, :nope} end}
+      ])
+
+      assert {:error, :nope} =
+               Docker.run_build_image("/nope", "Dockerfile", "x:y", %{}, @sandbox)
     end
   end
 

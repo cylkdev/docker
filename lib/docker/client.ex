@@ -199,11 +199,13 @@ defmodule Docker.Client do
         case Req.parse_message(resp, msg) do
           {:ok, [{:data, data}]} -> drain_async_body_loop(resp, ref, [acc, data])
           {:ok, [:done]} -> IO.iodata_to_binary(acc)
-          {:ok, _} -> drain_async_body_loop(resp, ref, acc)
-          {:error, _} -> IO.iodata_to_binary(acc)
+          {:ok, [{:trailers, _trailers}]} -> drain_async_body_loop(resp, ref, acc)
+          {:error, reason} -> raise Docker.StreamError, reason: reason
           :unknown -> drain_async_body_loop(resp, ref, acc)
         end
     after
+      # A partial error body is better than hanging: this drain only ever
+      # runs to populate the body of an already-failed (non-2xx) response.
       5_000 -> IO.iodata_to_binary(acc)
     end
   end
@@ -219,7 +221,6 @@ defmodule Docker.Client do
   defp init_decoder(:frame), do: ""
   defp init_decoder(:ndjson), do: ""
   defp init_decoder(:raw), do: nil
-  defp init_decoder(_), do: ""
 
   defp next_event({_resp, _ref, _decoder, true} = state, _into_mode) do
     {:halt, state}
@@ -236,17 +237,18 @@ defmodule Docker.Client do
           {:ok, [:done]} ->
             {:halt, {resp, ref, decoder, true}}
 
-          {:ok, _other} ->
+          {:ok, [{:trailers, _trailers}]} ->
             {[], {resp, ref, decoder, false}}
 
-          {:error, _reason} ->
-            {:halt, {resp, ref, decoder, true}}
+          {:error, reason} ->
+            raise Docker.StreamError, reason: reason
 
+          # Req replies :unknown for messages belonging to another request.
           :unknown ->
             {[], state}
         end
     after
-      60_000 -> {:halt, {resp, ref, decoder, true}}
+      60_000 -> raise Docker.StreamError, reason: :timeout
     end
   end
 
@@ -338,16 +340,15 @@ defmodule Docker.Client do
     [body: tar, headers: [{"content-type", "application/x-tar"}]]
   end
 
-  defp body_opts(body) when is_binary(body), do: [body: body]
-  defp body_opts(body), do: [body: body]
+  defp body_opts(body) when is_binary(body) or is_list(body), do: [body: body]
 
   defp headers_opt(options) do
     caller_headers = Keyword.get(options, :headers, [])
 
     headers =
       case Keyword.get(options, :registry_auth) do
+        nil -> caller_headers
         value when is_binary(value) -> caller_headers ++ [{"x-registry-auth", value}]
-        _other -> caller_headers
       end
 
     if headers === [] do
@@ -362,7 +363,6 @@ defmodule Docker.Client do
       {k, [v]} -> {k, v}
       {k, values} when is_list(values) -> {k, Enum.join(values, ",")}
       {k, v} when is_binary(v) -> {k, v}
-      {k, v} -> {k, to_string(v)}
     end)
   end
 
@@ -377,8 +377,8 @@ defmodule Docker.Client do
     else
       version =
         case Keyword.get(options, :version) do
+          nil -> EngineEndpoint.version(engine_endpoint)
           v when is_binary(v) and v !== "" -> v
-          _other -> EngineEndpoint.version(engine_endpoint)
         end
 
       "/v" <> version <> path

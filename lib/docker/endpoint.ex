@@ -326,8 +326,8 @@ defmodule Docker.Endpoint do
   @spec options_url(keyword()) :: String.t() | nil
   defp options_url(options) do
     case Keyword.get(options, :host) do
+      nil -> nil
       url when is_binary(url) -> url
-      _other -> nil
     end
   end
 
@@ -366,9 +366,21 @@ defmodule Docker.Endpoint do
   @spec env_tls_verify?() :: boolean()
   defp env_tls_verify? do
     case System.get_env("DOCKER_TLS_VERIFY") do
-      "1" -> true
-      "true" -> true
-      _other -> false
+      nil ->
+        false
+
+      "" ->
+        false
+
+      "1" ->
+        true
+
+      "true" ->
+        true
+
+      other ->
+        raise ArgumentError,
+              "Expected DOCKER_TLS_VERIFY to be unset, \"\", \"1\", or \"true\", got: #{inspect(other)}"
     end
   end
 
@@ -393,18 +405,15 @@ defmodule Docker.Endpoint do
   defp explicit_port?(url) do
     case Regex.run(~r{^[a-zA-Z][a-zA-Z0-9+.\-]*://[^/?#]*}, url) do
       [authority] -> Regex.match?(~r/:\d+$/, authority)
-      _other -> false
+      nil -> false
     end
   end
 
   @spec apply_version(t(), keyword()) :: t()
   defp apply_version(%__MODULE__{} = ep, options) do
     case Keyword.get(options, :version) do
-      version when is_binary(version) and version !== "" ->
-        %{ep | version: version}
-
-      _other ->
-        ep
+      nil -> ep
+      version when is_binary(version) and version !== "" -> %{ep | version: version}
     end
   end
 end

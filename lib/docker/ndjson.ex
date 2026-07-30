@@ -11,7 +11,7 @@ defmodule Docker.NDJSON do
 
     - Split a buffer at `\\n` boundaries into complete lines plus a
       trailing partial line.
-    - Decode each complete non-empty line as JSON via `JSON.decode/1`.
+    - Decode each complete non-empty line as JSON via `JSON.decode!/1`.
     - Carry the trailing partial line forward as `leftover` for the
       next call.
 
@@ -42,7 +42,9 @@ defmodule Docker.NDJSON do
   arrival order and `leftover` is bytes that did not yet form a
   complete line. Pass `leftover` back as `buffer` on the next call.
 
-  Lines that fail to decode as JSON are silently dropped.
+  Raises `JSON.DecodeError` if a complete line is not valid JSON. A
+  malformed line means the daemon stream is corrupt, so it fails rather
+  than dropping the event.
   """
   @spec decode_chunk(binary(), binary()) :: {[map() | list() | term()], binary()}
   def decode_chunk(chunk, buffer) when is_binary(chunk) and is_binary(buffer) do
@@ -66,10 +68,7 @@ defmodule Docker.NDJSON do
     if trimmed === "" do
       []
     else
-      case JSON.decode(trimmed) do
-        {:ok, value} -> [value]
-        {:error, _reason} -> []
-      end
+      [JSON.decode!(trimmed)]
     end
   end
 end

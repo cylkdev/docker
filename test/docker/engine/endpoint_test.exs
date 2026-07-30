@@ -181,6 +181,24 @@ defmodule Docker.EndpointTest do
       assert ep.minty.tls === nil
     end
 
+    test "treats an empty DOCKER_TLS_VERIFY as off" do
+      System.put_env("DOCKER_HOST", "tcp://h:2375")
+      System.put_env("DOCKER_TLS_VERIFY", "")
+
+      assert {:ok, ep} = EngineEndpoint.from_options([])
+      assert ep.minty.scheme === :http
+      assert ep.minty.tls === nil
+    end
+
+    test "raises on an unrecognised DOCKER_TLS_VERIFY rather than silently not verifying" do
+      System.put_env("DOCKER_HOST", "tcp://h:2376")
+      System.put_env("DOCKER_TLS_VERIFY", "yes")
+
+      assert_raise ArgumentError, ~r/Expected DOCKER_TLS_VERIFY/, fn ->
+        EngineEndpoint.from_options([])
+      end
+    end
+
     test "builds tls map with nil files when DOCKER_CERT_PATH is unset" do
       System.put_env("DOCKER_HOST", "tcp://h:2376")
       System.put_env("DOCKER_TLS_VERIFY", "1")

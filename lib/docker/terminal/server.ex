@@ -110,22 +110,41 @@ defmodule Docker.Terminal.Server do
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{socket_ref: ref} = server) do
+  # `type` is :process for an SSH-tunnelled session and :port for a TCP one.
+  def handle_info({:DOWN, ref, type, _transport, _reason}, %{socket_ref: ref} = server)
+      when type in [:process, :port] do
     {:stop, :normal, %{server | socket_ref: nil}}
   end
 
-  def handle_info(_msg, server), do: {:noreply, server}
+  # A :DOWN for any other ref is a monitor this server no longer tracks.
+  def handle_info({:DOWN, _ref, type, _transport, _reason}, server)
+      when type in [:process, :port] do
+    {:noreply, server}
+  end
+
+  # Daemon output that arrived outside a `command/3` call. `Session.recv/3`
+  # drains the mailbox itself, so anything reaching the GenServer loop is
+  # unsolicited and belongs to no pending read.
+  def handle_info({:docker_stream, _conn, :data, _bytes}, server) do
+    {:noreply, server}
+  end
+
+  def handle_info({:docker_stream, _conn, :closed}, server) do
+    {:stop, :normal, server}
+  end
 
   @impl true
   def terminate(_reason, server) do
-    _ = Controller.close(server.session)
+    :ok = Controller.close(server.session)
     :ok
   end
 
+  # `Process.monitor/1` always calls `:erlang.monitor(:process, item)`, which
+  # raises on a port, so a TCP session's socket needs the `:port` form.
   defp monitor_transport(session) do
     case Controller.transport(session) do
       pid when is_pid(pid) -> Process.monitor(pid)
-      _ -> nil
+      port when is_port(port) -> :erlang.monitor(:port, port)
     end
   end
 end

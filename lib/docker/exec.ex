@@ -299,13 +299,8 @@ defmodule Docker.Exec do
   defp do_exec_run_with_status(container_ref, cmd, options) do
     with {:ok, exec_id} <- exec_create(container_ref, cmd, options),
          {:ok, output} <- exec_start(exec_id, options),
-         {:ok, inspect} <- exec_inspect(exec_id, options) do
-      {:ok,
-       %{
-         output: output,
-         exit_code: Map.get(inspect, :exit_code),
-         running: Map.get(inspect, :running)
-       }}
+         {:ok, %{exit_code: exit_code, running: running}} <- exec_inspect(exec_id, options) do
+      {:ok, %{output: output, exit_code: exit_code, running: running}}
     end
   end
 

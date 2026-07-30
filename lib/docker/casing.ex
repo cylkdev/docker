@@ -157,7 +157,7 @@ defmodule Docker.Casing do
   end
 
   defp apply_casing!(value, casing, {mod, fun})
-       when is_atom(mod) and not is_nil(mod) and (is_atom(fun) and not is_nil(fun)) do
+       when is_atom(mod) and is_atom(fun) do
     ensure_function_exported!(mod, fun, 2)
     apply(mod, fun, [value, casing])
   end
@@ -177,7 +177,7 @@ defmodule Docker.Casing do
 
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp apply_casing!(value, casing, casing_module)
-       when is_atom(casing_module) and not is_nil(casing_module) do
+       when is_atom(casing_module) do
     case casing do
       :camel ->
         ensure_function_exported!(casing_module, :to_camel, 1)

@@ -197,9 +197,6 @@ defmodule Docker.Streaming.Session do
 
         {:error, :closed} ->
           %{session | closed: true}
-
-        {:error, _reason} ->
-          %{session | closed: true}
       end
     end
   end
