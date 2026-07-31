@@ -133,14 +133,25 @@ defmodule Docker.Terminal do
   @doc """
   Returns `:ok` after closing the session open under `container_ref`.
 
+  Blocks until the session process is down and its name is free, so a
+  following `open/2` under the same name cannot race the shutdown.
+
   Idempotent: returns `:ok` even when no session is registered.
   """
   @doc since: "0.1.0"
   @spec close(binary()) :: :ok
   def close(container_ref) when is_binary(container_ref) do
     case whereis(container_ref) do
-      {:ok, pid} -> GenServer.call(pid, :close)
-      :error -> :ok
+      {:ok, pid} ->
+        ref = Process.monitor(pid)
+        :ok = GenServer.call(pid, :close)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+        end
+
+      :error ->
+        :ok
     end
   end
 
@@ -229,6 +240,10 @@ defmodule Docker.Terminal do
 
   @impl true
   def terminate(_reason, server) do
+    # Unregister before exiting rather than leaving it to the Registry's own
+    # DOWN handling, which lands after ours: a caller that has seen the
+    # process die would otherwise still find the name taken.
+    _ = Registry.unregister(Docker.Terminal.Registry, server.name)
     :ok = Session.close(server.session)
     :ok
   end

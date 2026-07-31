@@ -303,9 +303,9 @@ defmodule Docker.Containers do
   ## Parameters
 
     - `group` — a string naming the group this container belongs to. Written
-      into the container's labels as `"app.docker.group"`, so every container
+      into the container's labels as `"elixir.docker.app"`, so every container
       in a group can be found later with
-      `list_containers(label: %{"app.docker.group" => "my-group"})`.
+      `list_containers(label: %{"elixir.docker.app" => "my-group"})`.
     - `name` — a string name for the container. Must be unique on the
       daemon. Use it as `container_ref` in all other functions.
     - `image` — the image to create the container from. Examples:

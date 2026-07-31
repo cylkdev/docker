@@ -22,7 +22,7 @@ defmodule Docker do
       │         This library (Docker)        │
       │  Translates calls into HTTP requests │
       └──────────────────┬───────────────────┘
-                         │  HTTP over Unix socket or TCP
+                         │  HTTP over the Unix socket
                          ▼
       ┌──────────────────────────────────────┐
       │           Docker daemon              │
@@ -63,7 +63,7 @@ defmodule Docker do
   Every container belongs to a group and has a name, both given at creation
   time. Use the name anywhere a container ID would work — it is easier to
   remember than a hex ID. The group is written into the container's labels as
-  `"app.docker.group"`, so containers created together can be found together.
+  `"elixir.docker.app"`, so containers created together can be found together.
 
   Labels are key-value string pairs you attach to a container at creation
   time. They let you tag containers with metadata (environment, role, owner)
@@ -84,7 +84,7 @@ defmodule Docker do
       {:ok, container} = Docker.find_container("worker-1")
       container["Id"]                  # full 64-char hex ID
       container["State"]["Running"]    # true or false
-      container["Labels"]              # includes "app.docker.group" => "my-group"
+      container["Labels"]              # includes "elixir.docker.app" => "my-group"
 
   ### Listing containers filtered by label
 
@@ -103,7 +103,7 @@ defmodule Docker do
       {:ok, group} =
         Docker.list_containers(%{
           all: true,
-          filters: [label: %{"app.docker.group" => "my-group"}]
+          filters: [label: %{"elixir.docker.app" => "my-group"}]
         })
 
       # Combine a label filter with any other filter
@@ -171,7 +171,7 @@ defmodule Docker do
     * `Docker.Session` — Raw bidirectional streaming sessions (advanced use).
     * `Docker.Streaming.Session` — The I/O handle returned by `attach/2` and
       `exec_session/3`.
-    * `Docker.Info` — Connectivity checks and version info.
+    * `Docker.Info` — Connectivity checks.
     * `Docker.Sandbox` — Canned responses for tests that run without a daemon.
 
   ## Testing without a daemon
