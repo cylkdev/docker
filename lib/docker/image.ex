@@ -69,11 +69,19 @@ defmodule Docker.Image do
 
   ## Parameters
 
-    - `params` — optional map of Docker Engine query parameters. Useful keys:
-      - `all` — boolean. When `true`, includes intermediate build layers.
+    - `params` — optional map of Docker Engine query parameters:
+      - `:all` — boolean. When `true`, includes intermediate build layers.
         Default: `false`.
-      - `filters` — JSON-encoded filter string (advanced). Example:
-        `~s({"reference":["alpine*"]})` to match only images named `alpine*`.
+      - `:shared_size` — boolean, include shared layer size. Sent to the
+        Engine as `shared-size`.
+      - `:digests` — boolean, include image digests.
+      - `:manifests` — boolean, include manifest summaries.
+      - `:identity` — boolean, include `Identity` per manifest. Requires
+        `:manifests`.
+      - `:filters` — optional keyword list: `:before`, `:dangling`, `:label`,
+        `:reference`, `:since`, `:until`. `:label` takes a
+        `%{binary() => binary()}` map; every other filter takes a list of
+        strings.
     - `options` — optional keyword list for daemon selection. See `Docker`
       for the options table.
 
@@ -89,15 +97,35 @@ defmodule Docker.Image do
       {:ok, images} = Docker.Image.list_images()
 
       # Only images tagged "alpine" (any version)
-      {:ok, images} =
-        Docker.Image.list_images(%{filters: ~s({"reference":["alpine*"]})})
+      {:ok, images} = Docker.Image.list_images(%{filters: [reference: ["alpine*"]]})
   """
   @spec list_images(Docker.params(), Docker.options()) :: Docker.result(Docker.json_list())
   def list_images(params \\ %{}, options \\ []) do
+    params =
+      params
+      |> encode_filters_param()
+      |> rename_shared_size_param()
+
     if sandbox?(options) do
       sandbox_list_images_response(params, options)
     else
       do_list_images(params, options)
+    end
+  end
+
+  defp encode_filters_param(params) do
+    case params[:filters] do
+      nil -> params
+      filters -> Map.put(params, :filters, Util.encode_filters(filters))
+    end
+  end
+
+  # The Engine spells this query parameter `shared-size`. Callers write it
+  # as `:shared_size` so the option stays an ordinary Elixir atom.
+  defp rename_shared_size_param(params) do
+    case Map.pop(params, :shared_size) do
+      {nil, params} -> params
+      {value, params} -> Map.put(params, :"shared-size", value)
     end
   end
 

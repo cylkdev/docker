@@ -14,14 +14,13 @@ defmodule Docker.Strings do
     * `:atomizeable_keys` — an allow-list of strings permitted to become
       new atoms. Accepted shapes: `:all` (no gating), `MapSet.t()`,
       `list()` (normalised to a `MapSet`), or `nil` (treat as absent and
-      fall back to compile-time config). An empty list is a valid
-      allow-list that rejects every key.
-
+      fall back to `:all`). An empty list is a valid allow-list that
+      rejects every key.
 
   `string_to_atom/2` returns `{:ok, atom()}` on success and
   `:error` when either `:to_existing_atom` is `true`
   and the atom does not exist, or the key is not in the resolved
-  allow-list. The default behaviour with no opts and no config is
+  allow-list. The default behaviour with no opts is
   `:to_existing_atom: false` plus `:atomizeable_keys` resolving to
   `:all`, i.e. `string_to_atom/2` mints freely. Callers handling
   untrusted input MUST opt in to one of the gates.
@@ -43,19 +42,14 @@ defmodule Docker.Strings do
 
   """
 
-  @app :shared_utils
-
   # Abstraction Function:
   #   The module represents a stateless gate over `String.to_atom/1`
   #   and `String.to_existing_atom/1`, parameterised by an atom-safety
   #   policy (`:to_existing_atom`, `:atomizeable_keys`).
   #
   # Data Invariant:
-  #   1. `:atomizeable_keys` is resolved at call time by taking the
-  #      first truthy value of:
-  #        a. `opts[:atomizeable_keys]`,
-  #        b. `Application.get_env(:mcp, :atomizeable_keys)`,
-  #        c. `:all`.
+  #   1. `:atomizeable_keys` is resolved at call time as
+  #      `opts[:atomizeable_keys]` when truthy, and `:all` otherwise.
   #      The resolved value is normalised:
   #        - `:all` is kept as `:all`;
   #        - `%MapSet{}` is kept as-is;
@@ -104,9 +98,8 @@ defmodule Docker.Strings do
         * `:atomizeable_keys` — `:all | MapSet.t() | list() | nil`.
           Allow-list of keys that may mint new atoms. `:all` disables
           gating. Lists are normalised to a `MapSet`; an empty list
-          rejects every key. `nil` (the default) means "fall back to
-          `Application.get_env(:mcp, :atomizeable_keys)`, then to `:all`". Any other
-          value raises `ArgumentError`.
+          rejects every key. `nil` (the default) means "no gating",
+          i.e. `:all`. Any other value raises `ArgumentError`.
 
       Unknown keys in `opts` are ignored.
 
@@ -163,7 +156,7 @@ defmodule Docker.Strings do
   end
 
   defp get_atomizable_keys(opts) do
-    case opts[:atomizeable_keys] || Application.get_env(@app, :atomizeable_keys) || :all do
+    case opts[:atomizeable_keys] || :all do
       :all ->
         :all
 

@@ -11,8 +11,6 @@ defmodule Docker.Streaming do
 
     - Open an attach session against a running container.
     - Open an exec-start session against an exec instance.
-    - Resolve a `Docker.Endpoint` from caller options and pass
-      its underlying `OneOhOne.Endpoint` through to `OneOhOne.start_link/2`.
 
   ## Examples
 
@@ -23,7 +21,7 @@ defmodule Docker.Streaming do
 
   """
 
-  alias Docker.Endpoint
+  alias Docker.Config
   alias Docker.Streaming.Session
   alias Docker.Streaming.SessionHandler
 
@@ -34,10 +32,7 @@ defmodule Docker.Streaming do
           {:ok, Session.t()} | {:error, term()}
   def open_attach(container_ref, tty, opts)
       when is_binary(container_ref) and is_boolean(tty) and is_list(opts) do
-    with {:ok, engine_endpoint} <- Endpoint.from_options(opts) do
-      path = build_attach_path(container_ref, engine_endpoint, opts)
-      open_upgrade(engine_endpoint, :post, path, "", tty, opts)
-    end
+    open_upgrade(:post, build_attach_path(container_ref, opts), "", tty)
   end
 
   @doc """
@@ -47,25 +42,28 @@ defmodule Docker.Streaming do
           {:ok, Session.t()} | {:error, term()}
   def open_exec_start(exec_id, tty, opts)
       when is_binary(exec_id) and is_boolean(tty) and is_list(opts) do
-    with {:ok, engine_endpoint} <- Endpoint.from_options(opts) do
-      encoder = opts[:json][:protocol_encode] || (&JSON.protocol_encode/2)
-      body = JSON.encode!(%{"Detach" => false, "Tty" => tty}, encoder)
-      path = "/v#{Endpoint.version(engine_endpoint)}/exec/#{exec_id}/start"
-      open_upgrade(engine_endpoint, :post, path, body, tty, opts)
-    end
+    body = JSON.encode!(%{"Detach" => false, "Tty" => tty})
+    path = "/v#{Config.version()}/exec/#{exec_id}/start"
+
+    open_upgrade(:post, path, body, tty)
   end
 
-  defp open_upgrade(engine_endpoint, method, path, body, tty, _opts) do
-    minty = Endpoint.to_minty(engine_endpoint)
-
+  # `OneOhOne` sends only `host` and `content-length` for us; the upgrade
+  # headers the Engine API expects have to come from the caller.
+  defp open_upgrade(method, path, body, tty) do
     upgrade = %{
       method: method,
       path: path,
-      body: body
+      body: body,
+      headers: [
+        {"upgrade", "tcp"},
+        {"connection", "Upgrade"},
+        {"content-type", "application/json"}
+      ]
     }
 
     start_opts = [
-      endpoint: minty,
+      endpoint: %OneOhOne.Endpoint{transport: :unix, socket_path: Config.socket_path()},
       upgrade: upgrade,
       params: %{owner: self()}
     ]
@@ -79,10 +77,8 @@ defmodule Docker.Streaming do
     end
   end
 
-  @spec build_attach_path(binary(), Endpoint.t(), keyword()) :: String.t()
-  defp build_attach_path(container_ref, %Endpoint{} = engine_endpoint, opts) do
-    version = Endpoint.version(engine_endpoint)
-
+  @spec build_attach_path(binary(), keyword()) :: String.t()
+  defp build_attach_path(container_ref, opts) do
     query =
       URI.encode_query(%{
         stream: "1",
@@ -91,7 +87,7 @@ defmodule Docker.Streaming do
         stderr: bool_param(Keyword.get(opts, :stderr, true))
       })
 
-    "/v#{version}/containers/#{container_ref}/attach?#{query}"
+    "/v#{Config.version()}/containers/#{container_ref}/attach?#{query}"
   end
 
   @spec bool_param(boolean()) :: String.t()

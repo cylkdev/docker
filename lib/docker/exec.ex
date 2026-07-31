@@ -6,9 +6,10 @@ defmodule Docker.Exec do
   sharing its filesystem and network. You create it, start it, and optionally
   inspect its exit code when it finishes.
 
-  **Most callers should use `Docker.Terminal` instead.** `Docker.Terminal.run/3`
-  wraps the three steps below into a single call. Use this module directly
-  when you need to control the create/start/inspect steps individually.
+  **Most callers want `exec_run/3`**, which wraps the three steps below
+  into a single call. Use the individual functions when you need to
+  control the create/start/inspect steps yourself. For a shell that
+  keeps its state across several commands, use `Docker.Terminal`.
 
   Every function here is also exposed on the `Docker` facade
   (e.g. `Docker.exec_run/3`). See `Docker` for the full client overview.
@@ -214,7 +215,9 @@ defmodule Docker.Exec do
   ## Parameters
 
     - `container_ref` — the container name or ID. Must be running.
-    - `cmd` — the command as a list of strings: `["ls", "-la", "/etc"]`.
+    - `cmd` — either an argv list run directly (`["ls", "-la", "/etc"]`)
+      or a string run through `/bin/sh -c`, so shell features like
+      pipes and redirects work.
     - `options` — optional keyword list. Accepts the same keys as
       `exec_create/3` (`:env`, `:user`, `:workdir`, `:tty`). See `Docker`
       for daemon-selection keys.
@@ -229,14 +232,19 @@ defmodule Docker.Exec do
 
       {:ok, output} = Docker.Exec.exec_run("my-container", ["cat", "/etc/hostname"])
 
+      # Through the shell — pipes and redirects work
+      {:ok, output} = Docker.Exec.exec_run("my-container", "ls /etc | wc -l")
+
       # With environment variables
       {:ok, output} =
         Docker.Exec.exec_run("my-container", ["printenv", "MY_VAR"],
           env: ["MY_VAR=hello"])
   """
-  @spec exec_run(Docker.container_ref(), [binary()], Docker.options()) ::
+  @spec exec_run(Docker.container_ref(), [binary()] | binary(), Docker.options()) ::
           Docker.result(binary())
-  def exec_run(container_ref, cmd, options \\ []) when is_list(cmd) do
+  def exec_run(container_ref, cmd, options \\ []) when is_list(cmd) or is_binary(cmd) do
+    cmd = cmd_or_wrap_sh(cmd)
+
     if sandbox?(options) do
       sandbox_exec_run_response(container_ref, cmd, options)
     else
@@ -260,7 +268,8 @@ defmodule Docker.Exec do
   ## Parameters
 
     - `container_ref` — the container name or ID. Must be running.
-    - `cmd` — the command as a list of strings.
+    - `cmd` — an argv list or a string run through `/bin/sh -c`, as in
+      `exec_run/3`.
     - `options` — optional keyword list. Same keys as `exec_run/3`.
 
   ## Returns
@@ -286,9 +295,12 @@ defmodule Docker.Exec do
         IO.puts("No errors found")
       end
   """
-  @spec exec_run_with_status(Docker.container_ref(), [binary()], Docker.options()) ::
+  @spec exec_run_with_status(Docker.container_ref(), [binary()] | binary(), Docker.options()) ::
           Docker.result(Docker.exec_result())
-  def exec_run_with_status(container_ref, cmd, options \\ []) when is_list(cmd) do
+  def exec_run_with_status(container_ref, cmd, options \\ [])
+      when is_list(cmd) or is_binary(cmd) do
+    cmd = cmd_or_wrap_sh(cmd)
+
     if sandbox?(options) do
       sandbox_exec_run_with_status_response(container_ref, cmd, options)
     else
@@ -303,6 +315,10 @@ defmodule Docker.Exec do
       {:ok, %{output: output, exit_code: exit_code, running: running}}
     end
   end
+
+  @spec cmd_or_wrap_sh([binary()] | binary()) :: [binary()]
+  defp cmd_or_wrap_sh(cmd) when is_list(cmd), do: cmd
+  defp cmd_or_wrap_sh(cmd) when is_binary(cmd), do: ["/bin/sh", "-c", cmd]
 
   @doc """
   Resizes the TTY of a running exec instance to `rows` x `cols`.

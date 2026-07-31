@@ -106,25 +106,6 @@ if Code.ensure_loaded?(SandboxRegistry) do
       set_responses(:ping, Enum.map(funcs, fn f -> {"*", f} end))
     end
 
-    # ---- version ("*", arity 1) ---------------------------------------------
-
-    @doc "Returns the registered response for `Docker.version/1`."
-    def version_response(opts) do
-      doc_examples = ["fn -> {:ok, %{...}} end", "fn (opts) -> ... end"]
-      func = find!(:version, "*", doc_examples)
-
-      case :erlang.fun_info(func)[:arity] do
-        0 -> func.()
-        1 -> func.(opts)
-        _ -> raise_unsupported_arity(func, doc_examples)
-      end
-    end
-
-    @doc "Registers responses for `Docker.version/1`."
-    def set_version_responses(funcs) do
-      set_responses(:version, Enum.map(funcs, fn f -> {"*", f} end))
-    end
-
     # ---- socket_available? ("*", arity 1) -----------------------------------
     # Note: Elixir does not allow `?` mid-identifier, so the response/setter
     # helpers drop the trailing `?` from `Docker.socket_available?/1`. The
@@ -164,25 +145,6 @@ if Code.ensure_loaded?(SandboxRegistry) do
     @doc "Registers responses for `Docker.socket_path/1`."
     def set_socket_path_responses(funcs) do
       set_responses(:socket_path, Enum.map(funcs, fn f -> {"*", f} end))
-    end
-
-    # ---- endpoint ("*", arity 1) --------------------------------------------
-
-    @doc "Returns the registered response for `Docker.endpoint/1`."
-    def endpoint_response(opts) do
-      doc_examples = ["fn -> %OneOhOne.Endpoint{} end", "fn (opts) -> ... end"]
-      func = find!(:endpoint, "*", doc_examples)
-
-      case :erlang.fun_info(func)[:arity] do
-        0 -> func.()
-        1 -> func.(opts)
-        _ -> raise_unsupported_arity(func, doc_examples)
-      end
-    end
-
-    @doc "Registers responses for `Docker.endpoint/1`."
-    def set_endpoint_responses(funcs) do
-      set_responses(:endpoint, Enum.map(funcs, fn f -> {"*", f} end))
     end
 
     # ---- list_containers ("*", arity 2: params, opts) -----------------------
@@ -417,31 +379,18 @@ if Code.ensure_loaded?(SandboxRegistry) do
       set_responses(:container_running?, tuples)
     end
 
-    # ---- create_container ("*", arity 4: name, image, labels, opts) --------
+    # ---- create_container ("*", arity 5: group, name, image, labels, opts) --
 
-    @doc "Returns the registered response for `Docker.create_container/4`."
-    def create_container_response(name, image, labels, opts) do
-      doc_examples = [
-        "fn -> {:ok, %{...}} end",
-        "fn (name) -> ... end",
-        "fn (name, image) -> ... end",
-        "fn (name, image, labels) -> ... end",
-        "fn (name, image, labels, opts) -> ... end"
-      ]
+    @doc "Returns the registered response for `Docker.create_container/5`."
+    def create_container_response(group, name, image, labels, opts) do
+      doc_examples = ["fn (group, name, image, labels, opts) -> ... end"]
 
       func = find!(:create_container, "*", doc_examples)
 
-      case :erlang.fun_info(func)[:arity] do
-        0 -> func.()
-        1 -> func.(name)
-        2 -> func.(name, image)
-        3 -> func.(name, image, labels)
-        4 -> func.(name, image, labels, opts)
-        _ -> raise_unsupported_arity(func, doc_examples)
-      end
+      func.(group, name, image, labels, opts)
     end
 
-    @doc "Registers responses for `Docker.create_container/4`."
+    @doc "Registers responses for `Docker.create_container/5`."
     def set_create_container_responses(funcs) do
       set_responses(:create_container, Enum.map(funcs, fn f -> {"*", f} end))
     end
@@ -821,16 +770,16 @@ if Code.ensure_loaded?(SandboxRegistry) do
       set_responses(:exec_run_with_status, tuples)
     end
 
-    # ---- put_archive (container_ref, dest_path, tar, opts) ------------------
+    # ---- put_archive (container_ref, dest_path, params, opts) ---------------
 
     @doc "Returns the registered response for `Docker.put_archive/4`."
-    def put_archive_response(container_ref, dest_path, tar, opts) do
+    def put_archive_response(container_ref, dest_path, params, opts) do
       doc_examples = [
         "fn -> :ok end",
         "fn (container_ref) -> ... end",
         "fn (container_ref, dest_path) -> ... end",
-        "fn (container_ref, dest_path, tar) -> ... end",
-        "fn (container_ref, dest_path, tar, opts) -> ... end"
+        "fn (container_ref, dest_path, params) -> ... end",
+        "fn (container_ref, dest_path, params, opts) -> ... end"
       ]
 
       func = find!(:put_archive, container_ref, doc_examples)
@@ -839,8 +788,8 @@ if Code.ensure_loaded?(SandboxRegistry) do
         0 -> func.()
         1 -> func.(container_ref)
         2 -> func.(container_ref, dest_path)
-        3 -> func.(container_ref, dest_path, tar)
-        4 -> func.(container_ref, dest_path, tar, opts)
+        3 -> func.(container_ref, dest_path, params)
+        4 -> func.(container_ref, dest_path, params, opts)
         _ -> raise_unsupported_arity(func, doc_examples)
       end
     end

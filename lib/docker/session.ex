@@ -69,7 +69,7 @@ defmodule Docker.Session do
         {:ok, tty}
 
       :error ->
-        case Docker.Container.find_container(container_ref, options) do
+        case Docker.Containers.find_container(container_ref, options) do
           {:ok, %{"Config" => %{"Tty" => tty}}} when is_boolean(tty) -> {:ok, tty}
           {:error, reason} -> {:error, reason}
         end

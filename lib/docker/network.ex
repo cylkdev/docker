@@ -35,7 +35,12 @@ defmodule Docker.Network do
 
   ## Parameters
 
-    - `params` — optional map of Docker Engine query parameters.
+    - `params` — optional map. This endpoint takes no plain query parameters
+      other than `:filters`.
+      - `:filters` — optional keyword list: `:dangling`, `:driver`, `:id`,
+        `:label`, `:name`, `:scope`, `:type`. `:label` takes a
+        `%{binary() => binary()}` map; every other filter takes a list of
+        strings.
     - `options` — optional keyword list for daemon selection. See `Docker`.
 
   ## Returns
@@ -48,9 +53,18 @@ defmodule Docker.Network do
 
       {:ok, networks} = Docker.Network.list_networks()
       Enum.map(networks, & &1["Name"])
+
+      # Only bridge networks
+      {:ok, networks} = Docker.Network.list_networks(%{filters: [driver: ["bridge"]]})
   """
   @spec list_networks(Docker.params(), Docker.options()) :: Docker.result(Docker.json_list())
   def list_networks(params \\ %{}, options \\ []) do
+    params =
+      case params[:filters] do
+        nil -> params
+        filters -> Map.put(params, :filters, Util.encode_filters(filters))
+      end
+
     if sandbox?(options) do
       sandbox_list_networks_response(params, options)
     else

@@ -8,20 +8,17 @@ defmodule Docker.StreamError do
   has no return value left to travel through. Raising is the only way the
   consumer can tell a truncated stream from a complete one.
 
-  ## Fields
-
-    * `:reason` — the transport error term, or `:timeout` when no chunk
-      arrived within the idle timeout.
+  The failure is carried by `:message` alone: raise with
+  `reason: term` and the term is rendered into the message text.
   """
 
-  defexception [:reason, :message]
+  defexception [:message]
 
-  @type t :: %__MODULE__{reason: term(), message: String.t()}
+  @type t :: %__MODULE__{message: String.t()}
 
   @impl true
   def exception(opts) do
-    reason = Keyword.fetch!(opts, :reason)
-    %__MODULE__{reason: reason, message: describe(reason)}
+    %__MODULE__{message: opts |> Keyword.fetch!(:reason) |> describe()}
   end
 
   defp describe(:timeout),

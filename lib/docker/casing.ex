@@ -38,11 +38,10 @@ defmodule Docker.Casing do
   # Abstraction Function:
   #   The module represents a stateless dispatcher: a partial function
   #   `(value, casing, backend) -> recased_value` that resolves `backend`
-  #   from `opts[:casing_module]` (or `@default_casing_module` when absent)
-  #   and routes `casing` to the corresponding function on `backend`.
-  #   `@default_casing_module` represents the implicit backend used when
-  #   no override is supplied. `@default_casing` represents the implicit
-  #   casing used when the caller passes `nil` (or omits the argument).
+  #   from `opts[:casing_module]` (or `@default_casing_module` when
+  #   absent) and routes `casing` to the corresponding function on
+  #   `backend`. `@default_casing` (`:snake`) is the implicit casing used
+  #   when the caller passes `nil` (or omits the argument).
   #   `@supported_casings` enumerates the casings the module agrees to
   #   accept on the module-atom dispatch path.
   #
@@ -71,8 +70,6 @@ defmodule Docker.Casing do
   #          v                                |
   #     resolved_backend --apply_casing-------+
 
-  @default_casing_module Recase
-  @default_casing :snake
   @supported_casings [
     :camel,
     :constant,
@@ -88,17 +85,20 @@ defmodule Docker.Casing do
     :underscore
   ]
 
+  @default_casing :snake
+  @default_casing_module Recase
+
   @doc """
   Returns `term` recased into `casing` by the resolved backend.
 
   Resolution order for the backend:
 
     1. `opts[:casing_module]` if present.
-    2. `@default_casing_module` (`Recase`) otherwise.
+    2. `Recase` otherwise.
 
   The backend may be a module atom, a 1- or 2-arity function, or a
   `{module, function}` tuple. When `casing` is `nil` (or omitted) it
-  defaults to `@default_casing` (`:snake`).
+  defaults to `:snake`.
 
   ## Parameters
 
@@ -246,8 +246,8 @@ defmodule Docker.Casing do
     end
   end
 
-  # Returns `opts[:casing_module]` if provided; otherwise returns the default
-  # `@default_casing_module`. Performs no assertions on the returned value.
+  # Returns `opts[:casing_module]` if provided; otherwise the default
+  # backend. Performs no assertions on the returned value.
   defp casing_module!(opts) do
     opts[:casing_module] || @default_casing_module
   end

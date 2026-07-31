@@ -1,4 +1,4 @@
-defmodule Docker.Container do
+defmodule Docker.Containers do
   @moduledoc """
   Container lifecycle management: create, start, stop, delete, inspect, and
   run commands.
@@ -8,29 +8,30 @@ defmodule Docker.Container do
   container as the dish — you can make many containers from the same image.
 
   Every function here is also exposed on the `Docker` facade
-  (e.g. `Docker.create_container/4`). See `Docker` for the full client
+  (e.g. `Docker.create_container/5`). See `Docker` for the full client
   overview.
 
   ## Container lifecycle
 
       # 1. Create a container from an image (it starts stopped)
-      {:ok, id} = Docker.Container.create_container("my-worker", "alpine:3.19", %{})
+      {:ok, id} = Docker.Containers.create_container("my-group", "my-worker", "alpine:3.19", %{})
 
       # 2. Start it
-      {:ok, _} = Docker.Container.start_container("my-worker")
+      {:ok, _} = Docker.Containers.start_container("my-worker")
 
       # 3. Check it is running
-      {:ok, container} = Docker.Container.find_container("my-worker")
+      {:ok, container} = Docker.Containers.find_container("my-worker")
       container["State"]["Running"]  # => true
 
       # 4. Run a command inside it
-      {:ok, output} = Docker.terminal_run("my-worker", "echo hello")
+      {:ok, output} = Docker.exec_run("my-worker", "echo hello")
 
       # 5. Stop and clean up
-      Docker.Container.stop_container("my-worker")
-      Docker.Container.delete_container("my-worker")
+      Docker.Containers.stop_container("my-worker")
+      Docker.Containers.delete_container("my-worker")
   """
 
+  alias Docker.Instance
   alias Docker.Client
   alias Docker.Frame
   alias Docker.Util
@@ -66,15 +67,15 @@ defmodule Docker.Container do
   ## Examples
 
       # All logs
-      {:ok, logs} = Docker.Container.container_logs("my-worker")
+      {:ok, logs} = Docker.Containers.container_logs("my-worker")
       IO.puts(logs)
 
       # Last 20 lines only
-      {:ok, logs} = Docker.Container.container_logs("my-worker", %{"tail" => "20"})
+      {:ok, logs} = Docker.Containers.container_logs("my-worker", %{"tail" => "20"})
 
       # Stderr only, with timestamps
       {:ok, logs} =
-        Docker.Container.container_logs("my-worker", %{}, stdout: false, timestamps: true)
+        Docker.Containers.container_logs("my-worker", %{}, stdout: false, timestamps: true)
   """
   @spec container_logs(Docker.container_ref(), Docker.params(), Docker.options()) ::
           Docker.result(binary())
@@ -115,22 +116,22 @@ defmodule Docker.Container do
   @doc """
   Returns a list of containers known to the daemon.
 
-  By default, only running containers are returned. Pass `%{all: true}` in
-  `params` to include stopped containers too.
+  By default, only running containers are returned. Pass `all: true` to
+  include stopped containers too.
 
   ## Parameters
 
-    - `params` — optional map of Docker Engine query parameters. Common keys:
-      - `all` — boolean. Include stopped containers (default `false`).
+    - `params` — optional map of Docker Engine query parameters: `:all`
+      (boolean, include stopped containers), `:limit` (integer), `:size`
+      (boolean).
+      - `:filters` — optional keyword list: `:ancestor`, `:before`, `:exited`,
+        `:expose`, `:health`, `:id`, `:isolation`, `:is_task`, `:label`,
+        `:name`, `:network`, `:publish`, `:since`, `:status`, `:volume`.
+        `:label` takes a `%{binary() => binary()}` map; every other filter
+        takes a list of strings. Several filters may be combined and all must
+        match (AND). Underscored keys are hyphenated on the wire (`:is_task`
+        -> `is-task`).
     - `options` — optional keyword list for daemon selection. See `Docker`.
-
-  ## Options
-
-    * `:labels` — a list of label strings in `"key"` or `"key=value"` form.
-      Encoded into the Docker Engine's `filters` query parameter as
-      `{"label": [...]}`. When set, this **overrides** any `:filters` (or
-      `"filters"`) key already present in `params`. Labels were attached
-      at creation time via `create_container/4`.
 
   ## Returns
 
@@ -141,24 +142,33 @@ defmodule Docker.Container do
   ## Examples
 
       # All containers (running + stopped), no filters
-      {:ok, containers} = Docker.Container.list_containers(%{all: true})
+      {:ok, containers} = Docker.Containers.list_containers(%{all: true})
 
       # Running containers tagged with label `tier=worker`
-      # (see create_container/4 for how to attach labels at creation)
+      # (see create_container/5 for how to attach labels at creation)
       {:ok, workers} =
-        Docker.Container.list_containers(%{}, labels: ["tier=worker"])
+        Docker.Containers.list_containers(%{filters: [label: %{"tier" => "worker"}]})
 
       # Multiple label constraints — container must match ALL of them (AND)
       {:ok, containers} =
-        Docker.Container.list_containers(%{all: true},
-          labels: ["env=staging", "tier=worker"])
+        Docker.Containers.list_containers(%{
+          all: true,
+          filters: [label: %{"env" => "staging", "tier" => "worker"}]
+        })
 
-      # Match a label key regardless of its value
-      {:ok, containers} = Docker.Container.list_containers(%{}, labels: ["env"])
+      # Combining a label filter with another filter
+      {:ok, running} =
+        Docker.Containers.list_containers(%{
+          filters: [label: %{"tier" => "worker"}, status: ["running"]]
+        })
   """
   @spec list_containers(Docker.params(), Docker.options()) :: Docker.result(Docker.json_list())
   def list_containers(params \\ %{}, options \\ []) do
-    params = apply_label_filter(params, options)
+    params =
+      case params[:filters] do
+        nil -> params
+        filters -> Map.put(params, :filters, Util.encode_filters(filters))
+      end
 
     if sandbox?(options) do
       sandbox_list_containers_response(params, options)
@@ -166,20 +176,6 @@ defmodule Docker.Container do
       do_list_containers(params, options)
     end
   end
-
-  defp apply_label_filter(params, options) do
-    case Keyword.get(options, :labels) do
-      nil ->
-        params
-
-      labels when is_list(labels) ->
-        params
-        |> Map.delete("filters")
-        |> Map.put(:filters, JSON.encode!(%{"label" => Enum.map(labels, &label!/1)}))
-    end
-  end
-
-  defp label!(label) when is_binary(label), do: label
 
   defp do_list_containers(params, options) do
     url = Util.append_query_string("/containers/json", params)
@@ -194,7 +190,7 @@ defmodule Docker.Container do
   @doc """
   Returns a single container by name or ID.
 
-  The `container_ref` is the `name` you passed to `create_container/4` — use
+  The `container_ref` is the `name` you passed to `create_container/5` — use
   that name here and everywhere else. You can also pass a full 64-character
   container ID or a unique prefix of it.
 
@@ -217,13 +213,13 @@ defmodule Docker.Container do
   ## Examples
 
       # Find by the name given at creation time
-      {:ok, _} = Docker.Container.create_container("my-worker", "alpine:3.19", %{})
-      {:ok, container} = Docker.Container.find_container("my-worker")
+      {:ok, _} = Docker.Containers.create_container("my-group", "my-worker", "alpine:3.19", %{})
+      {:ok, container} = Docker.Containers.find_container("my-worker")
       container["Id"]                 # full hex ID
       container["State"]["Running"]   # true or false
 
       # Find by container ID (or unique prefix)
-      {:ok, container} = Docker.Container.find_container("3f4a2c9b1e0d")
+      {:ok, container} = Docker.Containers.find_container("3f4a2c9b1e0d")
   """
   @spec find_container(Docker.container_ref(), Docker.options()) ::
           Docker.result(Docker.json_map())
@@ -270,11 +266,11 @@ defmodule Docker.Container do
   ## Examples
 
       # Normal removal (container must be stopped first)
-      Docker.Container.stop_container("my-worker")
-      {:ok, _} = Docker.Container.delete_container("my-worker")
+      Docker.Containers.stop_container("my-worker")
+      {:ok, _} = Docker.Containers.delete_container("my-worker")
 
       # Force-remove a running container
-      {:ok, _} = Docker.Container.delete_container("my-worker", %{force: true})
+      {:ok, _} = Docker.Containers.delete_container("my-worker", %{force: true})
   """
   @spec delete_container(Docker.container_ref(), Docker.params(), Docker.options()) ::
           Docker.result(Docker.json_map() | binary() | list())
@@ -302,10 +298,14 @@ defmodule Docker.Container do
   The container starts in a stopped state. Call `start_container/2` to start
   it. The `name` you give here is the handle you use everywhere else —
   `find_container/2`, `start_container/2`, `stop_container/2`, and
-  `Docker.terminal_run/3` all accept it.
+  `Docker.exec_run/3` all accept it.
 
   ## Parameters
 
+    - `group` — a string naming the group this container belongs to. Written
+      into the container's labels as `"app.docker.group"`, so every container
+      in a group can be found later with
+      `list_containers(label: %{"app.docker.group" => "my-group"})`.
     - `name` — a string name for the container. Must be unique on the
       daemon. Use it as `container_ref` in all other functions.
     - `image` — the image to create the container from. Examples:
@@ -327,20 +327,18 @@ defmodule Docker.Container do
       Example: `binds: ["/host/path:/container/path"]`.
     * `:mounts` — list of mount config maps (advanced, mirrors Docker API
       `Mounts` field).
-    * `:networks` — list of network names (strings) or a map of
-      `name => config` to connect the container to at creation time.
+    * `:networks` — list of network names to connect the container to at
+      creation time. Example: `networks: ["backend", "frontend"]`.
     * `:network_mode` — string network mode, e.g. `"host"` or `"none"`.
     * `:exposed_ports` — list of `%{port: integer, protocol: "tcp"|"udp"}`
       maps declaring ports to expose.
-    * `:port_bindings` — list of port binding maps for host-to-container
-      port mapping.
-    * `:expose_http_port` — boolean shortcut: exposes port 80/tcp and
-      binds it to host port 80 (default `false`).
-    * `:interactive_shell` — boolean or shell path. When `true`, sets the
-      default command to `["/bin/sh"]` with TTY and stdin attached. Pass
-      a string or list to use a different shell.
-    * `:open_stdin` — boolean, attach stdin even without `:interactive_shell`
-      (default `false`).
+    * `:port_bindings` — list of
+      `%{protocol: "tcp"|"udp", container_port: integer, host_port: integer,
+      host_ip: binary}` maps mapping host ports to container ports.
+    * `:tty` — boolean, allocate a pseudo-terminal (default `false`).
+    * `:open_stdin` — boolean, attach stdin and stdout/stderr
+      (default `false`). For an interactive shell, combine the three:
+      `cmd: ["/bin/sh"], tty: true, open_stdin: true`.
     * `:auto_remove` — boolean, delete the container automatically when it
       stops (default `false`).
     * `:platform` — string platform specifier, e.g. `"linux/amd64"`.
@@ -359,11 +357,12 @@ defmodule Docker.Container do
   ## Examples
 
       # Minimal — no labels, no extra options
-      {:ok, id} = Docker.Container.create_container("my-app", "alpine:3.19", %{})
+      {:ok, id} = Docker.Containers.create_container("my-group", "my-app", "alpine:3.19", %{})
 
       # With labels — tag it so you can filter it later
       {:ok, id} =
-        Docker.Container.create_container(
+        Docker.Containers.create_container(
+          "my-group",
           "my-worker",
           "alpine:3.19",
           %{"env" => "staging", "tier" => "worker"}
@@ -371,41 +370,43 @@ defmodule Docker.Container do
 
       # With environment variables and a custom command
       {:ok, id} =
-        Docker.Container.create_container(
+        Docker.Containers.create_container(
+          "my-group",
           "my-server",
           "nginx:alpine",
           %{"app" => "web"},
           env: ["PORT=8080", "DEBUG=true"],
           cmd: ["nginx", "-g", "daemon off;"],
-          expose_http_port: true
+          exposed_ports: [%{port: 80, protocol: "tcp"}],
+          port_bindings: [
+            %{protocol: "tcp", container_port: 80, host_port: 80, host_ip: "0.0.0.0"}
+          ]
         )
 
       # After creation, find the container by the name you gave it
-      {:ok, container} = Docker.Container.find_container("my-worker")
+      {:ok, container} = Docker.Containers.find_container("my-worker")
       container["State"]["Running"]  # => false (not started yet)
 
       # List all containers with a specific label
       {:ok, workers} =
-        Docker.Container.list_containers(%{}, labels: ["tier=worker"])
+        Docker.Containers.list_containers(%{filters: [label: %{"tier" => "worker"}]})
   """
-  @spec create_container(binary(), binary(), Docker.labels(), Docker.options()) ::
+  @spec create_container(binary(), binary(), binary(), Docker.labels(), Docker.options()) ::
           Docker.result(Docker.docker_id()) | {:error, {list(), Docker.docker_id()}}
-  def create_container(name, image, labels, options \\ [])
-      when is_binary(name) and is_binary(image) do
+  def create_container(group, name, image, labels, options \\ []) do
     if sandbox?(options) do
-      sandbox_create_container_response(name, image, labels, options)
+      sandbox_create_container_response(group, name, image, labels, options)
     else
-      do_create_container(name, image, labels, options)
+      do_create_container(group, name, image, labels, options)
     end
   end
 
-  defp do_create_container(name, image, labels, options) do
+  defp do_create_container(group, name, image, labels, options) do
     platform = Keyword.get(options, :platform, "")
-    options = maybe_expose_http_port(options)
 
     url = "/containers/create?name=#{name}&platform=#{platform}"
 
-    config = build_create_container_config(name, image, labels, options)
+    config = group |> Instance.new(name, image, labels, options) |> Instance.to_map()
 
     case Client.request(:post, url, {:json, config}, options) do
       {:ok, %{status: code, body: body}} when code in 200..299 ->
@@ -419,30 +420,6 @@ defmodule Docker.Container do
     end
   end
 
-  @doc false
-  def build_create_container_config(name, image, labels, options) do
-    auto_remove? = Keyword.get(options, :auto_remove, false)
-
-    base = %{
-      "Image" => image,
-      "Name" => name,
-      "ExposedPorts" => build_exposed_ports_spec(options),
-      "HostConfig" => %{
-        "AutoRemove" => auto_remove?,
-        "PortBindings" => build_port_bindings_spec(options)
-      },
-      "Labels" => labels
-    }
-
-    base
-    |> maybe_put_container_networking(options)
-    |> maybe_put_container_mounts(options)
-    |> maybe_put_container_env(options)
-    |> maybe_put_container_command(options)
-    |> maybe_put_interactive_shell(options)
-    |> maybe_put_open_stdin(options)
-  end
-
   defp interpret_create_response(%{"Id" => id, "Warnings" => []}), do: {:ok, id}
 
   defp interpret_create_response(%{"Id" => id, "Warnings" => warnings}),
@@ -453,7 +430,7 @@ defmodule Docker.Container do
   @doc """
   Starts a previously created container.
 
-  The container must have been created with `create_container/4` first. If
+  The container must have been created with `create_container/5` first. If
   the container is already running, this returns an error.
 
   ## Parameters
@@ -470,7 +447,7 @@ defmodule Docker.Container do
 
   ## Examples
 
-      {:ok, _} = Docker.Container.start_container("my-worker")
+      {:ok, _} = Docker.Containers.start_container("my-worker")
   """
   @spec start_container(Docker.container_ref(), Docker.options()) ::
           Docker.result(binary() | Docker.json_map())
@@ -514,7 +491,7 @@ defmodule Docker.Container do
 
   ## Examples
 
-      {:ok, _} = Docker.Container.stop_container("my-worker")
+      {:ok, _} = Docker.Containers.stop_container("my-worker")
   """
   @spec stop_container(Docker.container_ref(), Docker.options()) ::
           Docker.result(binary() | Docker.json_map())
@@ -544,15 +521,13 @@ defmodule Docker.Container do
   container without rebuilding the image. The container does not need to be
   running — this works on stopped containers too.
 
-  To create a tar binary in Elixir, use `:erl_tar.create/3` with
-  `[:binary, :memory]`.
-
   ## Parameters
 
     - `container_ref` — the container name or ID.
     - `dest_path` — the absolute path inside the container where the
       archive will be extracted. Example: `"/app"` or `"/etc/myapp"`.
-    - `tar` — a binary containing a valid tar archive.
+    - `tar_path` — path to a pre-built tar archive on the local filesystem.
+      Build one with `Docker.Archive.create_tar/3`.
     - `options` — optional keyword list for daemon selection. See `Docker`.
       Also accepts `:no_overwrite_dir_non_dir` and `:copy_uid_gid` (boolean)
       forwarded to the Docker Engine API.
@@ -567,34 +542,48 @@ defmodule Docker.Container do
 
   ## Examples
 
-      # Create a tar containing a single file and upload it
-      {:ok, tar} =
-        :erl_tar.create("archive", [{"hello.txt", "Hello from Elixir!"}],
-          [:binary, :memory])
+      :ok = Docker.Archive.create_tar("/tmp/assets.tar", "./assets")
 
-      {:ok, _} = Docker.Container.put_archive("my-container", "/tmp", tar)
+      # Extracts to /tmp/assets/...
+      {:ok, _} = Docker.Containers.put_archive("my-container", "/tmp", "/tmp/assets.tar")
   """
-  @spec put_archive(Docker.container_ref(), binary(), binary(), Docker.options()) ::
-          Docker.result(map() | binary())
-  def put_archive(container_ref, dest_path, tar, options \\ [])
-      when is_binary(container_ref) and is_binary(dest_path) and is_binary(tar) do
+  @spec put_archive(
+          Docker.container_ref(),
+          binary(),
+          binary(),
+          Docker.options()
+        ) :: Docker.result(map() | binary())
+  def put_archive(container_ref, dest_path, tar_path, options \\ [])
+      when is_binary(container_ref) and is_binary(dest_path) and is_binary(tar_path) do
     if sandbox?(options) do
-      sandbox_put_archive_response(container_ref, dest_path, tar, options)
+      sandbox_put_archive_response(container_ref, dest_path, tar_path, options)
     else
-      do_put_archive(container_ref, dest_path, tar, options)
+      do_put_archive(container_ref, dest_path, tar_path, options)
     end
   end
 
-  defp do_put_archive(container_ref, dest_path, tar, options) do
+  defp do_put_archive(container_ref, dest_path, tar_path, options) do
+    query = %{path: dest_path}
+
     query =
-      %{path: dest_path}
-      |> Util.maybe_put(:noOverwriteDirNonDir, Keyword.get(options, :no_overwrite_dir_non_dir))
-      |> Util.maybe_put(:copyUIDGID, Keyword.get(options, :copy_uid_gid))
+      case Keyword.get(options, :no_overwrite_dir_non_dir) do
+        nil -> query
+        val -> Map.put(query, :noOverwriteDirNonDir, val)
+      end
+
+    query =
+      case Keyword.get(options, :copy_uid_gid) do
+        nil -> query
+        val -> Map.put(query, :copyUIDGID, val)
+      end
 
     url = Util.append_query_string("/containers/#{container_ref}/archive", query)
 
-    case Client.request(:put, url, {:tar, tar}, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
+    with {:ok, tar} <- File.read(tar_path),
+         {:ok, %{status: code, body: body}} when code in 200..299 <-
+           Client.request(:put, url, {:tar, tar}, options) do
+      {:ok, body}
+    else
       {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
       {:error, reason} -> {:error, reason}
     end
@@ -615,8 +604,8 @@ defmodule Docker.Container do
 
   ## Examples
 
-      {:ok, container} = Docker.Container.find_container("my-worker")
-      Docker.Container.container_running?(container)  # => true or false
+      {:ok, container} = Docker.Containers.find_container("my-worker")
+      Docker.Containers.container_running?(container)  # => true or false
   """
   @spec container_running?(map()) :: boolean()
   def container_running?(%{"State" => %{"Running" => running}}) when is_boolean(running) do
@@ -640,7 +629,7 @@ defmodule Docker.Container do
 
   ## Examples
 
-      Docker.Container.container_running?("my-worker")  # => true or false
+      Docker.Containers.container_running?("my-worker")  # => true or false
   """
   @spec container_running?(Docker.container_ref(), Docker.options()) :: boolean()
   def container_running?(container_ref, options \\ []) when is_binary(container_ref) do
@@ -652,194 +641,6 @@ defmodule Docker.Container do
         {:error, %{status: 404}} -> false
       end
     end
-  end
-
-  defp maybe_put_container_command(base_params, options) do
-    case Keyword.get(options, :cmd) do
-      nil -> base_params
-      cmd when is_list(cmd) -> Map.put(base_params, "Cmd", cmd)
-    end
-  end
-
-  defp maybe_put_container_env(base_params, options) do
-    case Keyword.get(options, :env) do
-      nil -> base_params
-      env when is_list(env) -> Map.put(base_params, "Env", env)
-    end
-  end
-
-  defp maybe_put_container_mounts(base_params, options) do
-    base_params
-    |> maybe_put_host_binds(options)
-    |> maybe_put_mounts(options)
-  end
-
-  defp maybe_put_host_binds(base_params, options) do
-    case Keyword.get(options, :binds) do
-      nil -> base_params
-      binds when is_list(binds) -> put_host_config(base_params, "Binds", binds)
-    end
-  end
-
-  defp maybe_put_mounts(base_params, options) do
-    case Keyword.get(options, :mounts) do
-      nil -> base_params
-      mounts when is_list(mounts) -> put_host_config(base_params, "Mounts", mounts)
-    end
-  end
-
-  defp maybe_put_container_networking(base_params, options) do
-    base_params
-    |> maybe_put_network_mode(options)
-    |> maybe_put_networks(options)
-  end
-
-  defp maybe_put_network_mode(base_params, options) do
-    case Keyword.get(options, :network_mode) do
-      nil -> base_params
-      mode when is_binary(mode) -> put_host_config(base_params, "NetworkMode", mode)
-    end
-  end
-
-  # "HostConfig" is always seeded by build_create_container_config/4.
-  defp put_host_config(base_params, key, value) do
-    host_config = Map.fetch!(base_params, "HostConfig")
-    Map.put(base_params, "HostConfig", Map.put(host_config, key, value))
-  end
-
-  defp maybe_put_networks(base_params, options) do
-    case Keyword.get(options, :networks) do
-      nil ->
-        base_params
-
-      networks when is_list(networks) ->
-        endpoints = build_network_endpoints_from_list(networks)
-        Map.put(base_params, "NetworkingConfig", %{"EndpointsConfig" => endpoints})
-
-      networks when is_map(networks) ->
-        endpoints = build_network_endpoints_from_map(networks)
-        Map.put(base_params, "NetworkingConfig", %{"EndpointsConfig" => endpoints})
-    end
-  end
-
-  defp build_network_endpoints_from_list(networks) do
-    Map.new(networks, fn name when is_binary(name) -> {name, %{}} end)
-  end
-
-  defp build_network_endpoints_from_map(networks) do
-    Map.new(networks, fn {name, config} when is_binary(name) and is_map(config) ->
-      {name, config}
-    end)
-  end
-
-  defp maybe_put_open_stdin(base_params, options) do
-    if Keyword.get(options, :open_stdin, false) do
-      base_params
-      |> Map.put("OpenStdin", true)
-      |> Map.put("AttachStdin", true)
-      |> Map.put("AttachStdout", true)
-      |> Map.put("AttachStderr", true)
-    else
-      base_params
-    end
-  end
-
-  defp maybe_put_interactive_shell(base_params, options) do
-    if Keyword.has_key?(options, :cmd) do
-      base_params
-    else
-      apply_interactive_shell(base_params, Keyword.get(options, :interactive_shell, false))
-    end
-  end
-
-  defp apply_interactive_shell(base_params, false), do: base_params
-
-  defp apply_interactive_shell(base_params, true),
-    do: put_interactive_shell_cmd(base_params, ["/bin/sh"])
-
-  defp apply_interactive_shell(base_params, shell) when is_binary(shell) and byte_size(shell) > 0,
-    do: put_interactive_shell_cmd(base_params, [shell])
-
-  defp apply_interactive_shell(base_params, [head | _rest] = cmd) when is_binary(head) do
-    put_interactive_shell_cmd(base_params, Enum.map(cmd, &shell_arg!/1))
-  end
-
-  defp shell_arg!(arg) when is_binary(arg), do: arg
-
-  defp put_interactive_shell_cmd(base_params, cmd) do
-    base_params
-    |> Map.put("Cmd", cmd)
-    |> Map.put("Tty", true)
-    |> Map.put("OpenStdin", true)
-    |> Map.put("AttachStdin", true)
-    |> Map.put("AttachStdout", true)
-    |> Map.put("AttachStderr", true)
-  end
-
-  defp maybe_expose_http_port(options) do
-    if Keyword.get(options, :expose_http_port, false) do
-      options
-      |> ensure_exposed_port_config(80, "tcp")
-      |> ensure_port_binding_config(%{
-        protocol: "tcp",
-        container: %{port: 80},
-        host: %{port: 80, ip: "0.0.0.0"}
-      })
-    else
-      options
-    end
-  end
-
-  defp ensure_exposed_port_config(options, port, protocol) do
-    existing = Keyword.get(options, :exposed_ports, [])
-
-    if Enum.any?(existing, &(&1.port === port and &1.protocol === protocol)) do
-      options
-    else
-      Keyword.put(options, :exposed_ports, existing ++ [%{port: port, protocol: protocol}])
-    end
-  end
-
-  defp ensure_port_binding_config(options, binding) do
-    existing = Keyword.get(options, :port_bindings, [])
-
-    if Enum.any?(existing, &port_binding_matches?(&1, binding)) do
-      options
-    else
-      Keyword.put(options, :port_bindings, existing ++ [binding])
-    end
-  end
-
-  defp port_binding_matches?(config, binding) do
-    config.protocol === binding.protocol and
-      config.container.port === binding.container.port and
-      config.host.port === binding.host.port and
-      config.host.ip === binding.host.ip
-  end
-
-  defp build_exposed_ports_spec(options) do
-    options
-    |> Keyword.get(:exposed_ports, [])
-    |> Map.new(fn config ->
-      {port_key(config.port, config.protocol), %{}}
-    end)
-  end
-
-  defp port_key(port, protocol) when protocol in ["tcp", "udp"],
-    do: "#{Integer.to_string(port)}/#{protocol}"
-
-  defp build_port_bindings_spec(options) do
-    options
-    |> Keyword.get(:port_bindings, [])
-    |> Enum.group_by(fn config -> {config.container.port, config.protocol} end)
-    |> Map.new(fn {{container_port, protocol}, configs} ->
-      values =
-        Enum.map(configs, fn config ->
-          %{"HostPort" => Integer.to_string(config.host.port), "HostIp" => config.host.ip}
-        end)
-
-      {port_key(container_port, protocol), values}
-    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -892,12 +693,12 @@ defmodule Docker.Container do
       as: :container_running_response
 
     @doc false
-    defdelegate sandbox_create_container_response(name, image, labels, options),
+    defdelegate sandbox_create_container_response(group, name, image, labels, options),
       to: Docker.Sandbox,
       as: :create_container_response
 
     @doc false
-    defdelegate sandbox_put_archive_response(container_ref, dest_path, tar, options),
+    defdelegate sandbox_put_archive_response(container_ref, dest_path, params, options),
       to: Docker.Sandbox,
       as: :put_archive_response
   else
@@ -968,10 +769,11 @@ defmodule Docker.Container do
       """
     end
 
-    defp sandbox_create_container_response(name, image, labels, options) do
+    defp sandbox_create_container_response(group, name, image, labels, options) do
       raise """
       Cannot use sandbox mode outside of dev/test environment.
 
+      group: #{inspect(group)}
       name: #{inspect(name)}
       image: #{inspect(image)}
       labels: #{inspect(labels)}
@@ -979,13 +781,13 @@ defmodule Docker.Container do
       """
     end
 
-    defp sandbox_put_archive_response(container_ref, dest_path, tar, options) do
+    defp sandbox_put_archive_response(container_ref, dest_path, params, options) do
       raise """
       Cannot use sandbox mode outside of dev/test environment.
 
       container_ref: #{inspect(container_ref)}
       dest_path: #{inspect(dest_path)}
-      tar: #{inspect(tar)}
+      params: #{inspect(params)}
       options: #{inspect(options)}
       """
     end

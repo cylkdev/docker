@@ -3,19 +3,17 @@ defmodule Docker.Streaming.Session do
   Stateful interactive I/O session against a container's stdin,
   stdout, and stderr.
 
-  Built on top of `OneOhOne`. A session wraps the underlying transport
-  handle (a `OneOhOne` connection pid in production, or a `:gen_tcp`
-  port in unit tests) plus the demultiplexer state used when the inner
-  process is running without a PTY (Docker frames stdout and stderr
-  separately on the wire in that mode).
+  Built on top of `OneOhOne`. A session wraps the `OneOhOne` connection
+  pid plus the demultiplexer state used when the inner process is
+  running without a PTY (Docker frames stdout and stderr separately on
+  the wire in that mode).
 
   Open a session with `Docker.attach/2` or `Docker.exec_session/3`,
   then drive it with `send/2` and `recv/3`. Close with `close/1`.
 
   ## Responsibilities
 
-    - Wrap a post-handshake transport handle plus optional leftover
-      bytes into a session value.
+    - Wrap a post-handshake connection pid into a session value.
     - Send bytes to the inner process's stdin.
     - Read from the session under one of two termination conditions:
       an idle timeout, or a delimiter appearing in the stdout stream.
@@ -37,10 +35,8 @@ defmodule Docker.Streaming.Session do
   alias Docker.Frame
 
   # Abstraction Function:
-  #   socket          represents the transport handle for this session,
-  #                   or nil after close/1 has run. The handle is either
-  #                   a OneOhOne.Connection pid (production path) or a
-  #                   :gen_tcp port (unit-test path).
+  #   socket          represents the OneOhOne.Connection pid for this
+  #                   session, or nil after close/1 has run.
   #   tty             records whether the inner process has a PTY.
   #                   When true, daemon output is a raw byte stream;
   #                   when false, output is multiplexed and demuxed via
@@ -52,7 +48,7 @@ defmodule Docker.Streaming.Session do
   #                   demux call. Empty when tty is true.
   #   closed          set once the underlying socket has been closed.
 
-  @type transport :: pid() | :gen_tcp.socket() | nil
+  @type transport :: pid() | nil
 
   @type t :: %__MODULE__{
           socket: transport(),
@@ -79,23 +75,6 @@ defmodule Docker.Streaming.Session do
 
   @default_max_bytes 10_000_000
   @default_until_timeout 30_000
-
-  @doc """
-  Returns a new session wrapping a post-handshake transport handle and
-  any leftover bytes.
-
-  ## Parameters
-
-    - `socket` - a transport handle. Either a `OneOhOne.Connection`
-      pid or a `:gen_tcp` port.
-    - `leftover` - `binary()`. Bytes already read past the upgrade
-      response head; ingested before the first read.
-    - `tty` - `boolean()`. Whether the inner process has a PTY.
-  """
-  @spec from_upgrade(transport(), binary(), boolean()) :: t()
-  def from_upgrade(socket, leftover, tty) when is_binary(leftover) and is_boolean(tty) do
-    ingest(%__MODULE__{socket: socket, tty: tty}, leftover)
-  end
 
   @doc """
   Returns a new session wrapping a `OneOhOne.Connection` pid.
@@ -133,7 +112,7 @@ defmodule Docker.Streaming.Session do
   def recv(%__MODULE__{} = session, {:until, delim}, opts)
       when is_binary(delim) and byte_size(delim) > 0 do
     overall = Keyword.get(opts, :timeout, @default_until_timeout)
-    deadline = System.monotonic_time(:millisecond) + overall
+    deadline = :erlang.monotonic_time(:millisecond) + overall
     loop_until(session, delim, deadline)
   end
 
@@ -151,11 +130,10 @@ defmodule Docker.Streaming.Session do
   def close(%__MODULE__{}), do: :ok
 
   # ---------------------------------------------------------------------------
-  # Transport dispatch — pid (OneOhOne) vs port (:gen_tcp)
+  # Transport dispatch — the OneOhOne connection process
   # ---------------------------------------------------------------------------
 
   defp transport_send(socket, data) when is_pid(socket), do: OneOhOne.push(socket, data)
-  defp transport_send(socket, data) when is_port(socket), do: :gen_tcp.send(socket, data)
 
   defp transport_recv(socket, ms) when is_pid(socket) do
     receive do
@@ -166,17 +144,7 @@ defmodule Docker.Streaming.Session do
     end
   end
 
-  defp transport_recv(socket, ms) when is_port(socket) do
-    :gen_tcp.recv(socket, 0, ms)
-  end
-
-  defp transport_close(socket) when is_pid(socket) do
-    OneOhOne.close(socket)
-  end
-
-  defp transport_close(socket) when is_port(socket) do
-    :gen_tcp.close(socket)
-  end
+  defp transport_close(socket) when is_pid(socket), do: OneOhOne.close(socket)
 
   # ---------------------------------------------------------------------------
   # Internals — recv loops, ingest, finalize
@@ -210,7 +178,7 @@ defmodule Docker.Streaming.Session do
         {:ok, out, %{session | buffer: rest}}
 
       :nomatch ->
-        remaining = deadline - System.monotonic_time(:millisecond)
+        remaining = deadline - :erlang.monotonic_time(:millisecond)
 
         if remaining <= 0 do
           {:error, :timeout, session}
@@ -232,9 +200,6 @@ defmodule Docker.Streaming.Session do
 
       {:error, :closed} ->
         {:error, :closed_before_delimiter, %{session | closed: true}}
-
-      {:error, reason} ->
-        {:error, reason, %{session | closed: true}}
     end
   end
 

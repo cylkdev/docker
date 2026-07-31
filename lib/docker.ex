@@ -14,7 +14,7 @@ defmodule Docker do
 
       ┌──────────────────────────────────────┐
       │           Your Elixir code           │
-      │   Docker.create_container("my-app")  │
+      │  Docker.create_container("my-app"…)  │
       └──────────────────┬───────────────────┘
                          │  function call
                          ▼
@@ -32,8 +32,7 @@ defmodule Docker do
 
   The daemon is a background process that Docker Desktop or the Docker
   CLI starts for you. By default this library connects to it over the
-  local Unix socket at `/var/run/docker.sock` or
-  `~/.docker/run/docker.sock`.
+  local Unix socket at `/var/run/docker.sock`.
 
   ## Quick start
 
@@ -44,14 +43,14 @@ defmodule Docker do
       {:ok, pull_stream} = Docker.pull_image("alpine:3.19")
       Stream.run(pull_stream)
 
-      # 3. Create a container from the image, give it a name
-      {:ok, _id} = Docker.create_container("my-worker", "alpine:3.19", %{})
+      # 3. Create a container from the image, give it a group and a name
+      {:ok, _id} = Docker.create_container("my-group", "my-worker", "alpine:3.19", %{})
 
       # 4. Start the container
       {:ok, _} = Docker.start_container("my-worker")
 
       # 5. Run a command inside the running container
-      {:ok, output} = Docker.terminal_run("my-worker", "echo hello")
+      {:ok, output} = Docker.exec_run("my-worker", "echo hello")
       IO.puts(output)
       # => "hello\\n"
 
@@ -59,10 +58,12 @@ defmodule Docker do
       Docker.stop_container("my-worker")
       Docker.delete_container("my-worker")
 
-  ## Container names and labels
+  ## Container groups, names, and labels
 
-  Every container has a name you give it when you create it. Use that name
-  anywhere a container ID would work — it is easier to remember than a hex ID.
+  Every container belongs to a group and has a name, both given at creation
+  time. Use the name anywhere a container ID would work — it is easier to
+  remember than a hex ID. The group is written into the container's labels as
+  `"app.docker.group"`, so containers created together can be found together.
 
   Labels are key-value string pairs you attach to a container at creation
   time. They let you tag containers with metadata (environment, role, owner)
@@ -72,6 +73,7 @@ defmodule Docker do
 
       {:ok, _id} =
         Docker.create_container(
+          "my-group",
           "worker-1",
           "alpine:3.19",
           %{"env" => "staging", "role" => "worker"}
@@ -82,115 +84,94 @@ defmodule Docker do
       {:ok, container} = Docker.find_container("worker-1")
       container["Id"]                  # full 64-char hex ID
       container["State"]["Running"]    # true or false
-      container["Labels"]              # %{"env" => "staging", "role" => "worker"}
+      container["Labels"]              # includes "app.docker.group" => "my-group"
 
   ### Listing containers filtered by label
 
       # All running containers with role=worker
-      {:ok, workers} = Docker.list_containers(%{}, labels: ["role=worker"])
+      {:ok, workers} = Docker.list_containers(%{filters: [label: %{"role" => "worker"}]})
 
       # Multiple constraints — containers must match ALL of them (AND logic)
       {:ok, staging_workers} =
-        Docker.list_containers(%{}, labels: ["env=staging", "role=worker"])
-
-      # Match a label key regardless of its value
-      {:ok, any_env} = Docker.list_containers(%{}, labels: ["env"])
+        Docker.list_containers(%{filters: [label: %{"env" => "staging", "role" => "worker"}]})
 
       # Include stopped containers too
       {:ok, all_workers} =
-        Docker.list_containers(%{all: true}, labels: ["role=worker"])
+        Docker.list_containers(%{all: true, filters: [label: %{"role" => "worker"}]})
+
+      # Every container in a group
+      {:ok, group} =
+        Docker.list_containers(%{
+          all: true,
+          filters: [label: %{"app.docker.group" => "my-group"}]
+        })
+
+      # Combine a label filter with any other filter
+      {:ok, running} =
+        Docker.list_containers(%{filters: [label: %{"role" => "worker"}, status: ["running"]]})
 
   ## Running commands in a container
 
-  `Docker.Terminal` is the recommended way to run commands in a running
-  container.
-
   ### One-shot command
 
-  Run a command and get its output back as a string:
+  `Docker.exec_run/3` runs a command and gives back its output as a string:
 
-      {:ok, output} = Docker.terminal_run("my-worker", "echo hello")
+      {:ok, output} = Docker.exec_run("my-worker", "echo hello")
       # output => "hello\\n"
 
   Pass a string to run it through `/bin/sh -c` (shell features like pipes
   and redirects work). Pass a list to run the command directly:
 
-      {:ok, output} = Docker.terminal_run("my-worker", ["cat", "/etc/hostname"])
+      {:ok, output} = Docker.exec_run("my-worker", ["cat", "/etc/hostname"])
 
   Get the exit code too:
 
       {:ok, %{output: out, exit_code: code}} =
-        Docker.terminal_run_with_status("my-worker", "ls /nonexistent")
+        Docker.exec_run_with_status("my-worker", "ls /nonexistent")
       # code => 1 (the command failed)
 
   ### Persistent shell
 
-  Open a shell once and send several commands to it. State carries across
-  commands — the working directory and environment variables persist:
+  `Docker.Terminal` opens a shell once and lets you send several commands
+  to it. State carries across commands — the working directory and
+  environment variables persist:
 
-      {:ok, term}      = Docker.terminal_open("my-worker")
-      {:ok, _, term}   = Docker.terminal_command(term, "cd /tmp")
-      {:ok, _, term}   = Docker.terminal_command(term, "echo hello > greeting.txt")
-      {:ok, out, term} = Docker.terminal_command(term, "cat greeting.txt")
+      :ok = Docker.terminal_open("my-worker")
+      {:ok, _}          = Docker.terminal_command("my-worker", "cd /tmp")
+      {:ok, _}          = Docker.terminal_command("my-worker", "echo hello > greeting.txt")
+      {:ok, {out, _}}   = Docker.terminal_command("my-worker", "cat greeting.txt")
       IO.puts(out)
       # => "hello\\n"
-      :ok = Docker.terminal_close(term)
+      :ok = Docker.terminal_close("my-worker")
 
-  `terminal_command/2` returns an updated handle each time — thread that
-  handle through each call to keep the session alive. See `Docker.Terminal`
-  for more options (custom shell, timeout, PTY allocation).
+  The session is addressed by container name throughout, and only one may
+  be open per name at a time. See `Docker.Terminal` for more options
+  (custom shell, PTY allocation, read termination).
 
   ## Connecting to a daemon
 
-  Every function accepts an optional keyword list for selecting which daemon
-  to connect to:
+  Every call reaches the local daemon over the Unix socket at
+  `Docker.Config.socket_path/0` (`/var/run/docker.sock`). There is nothing
+  to configure per call:
 
-  | Option       | What it does                                                            |
-  |--------------|-------------------------------------------------------------------------|
-  | `:host`      | URL string: `"unix:///path"`, `"tcp://host:2375"`, `"https://host:2376"` |
-  | `:socket`    | Unix socket path shortcut                                               |
-  | `:endpoint`  | Pre-built `Docker.Endpoint` value (advanced)                            |
-  | `:tls`       | TLS material map for TCP endpoints                                      |
-  | `:version`   | Docker Engine API version string override                               |
-
-  When none of these is given, the library checks the `DOCKER_HOST`
-  environment variable, then tries `~/.docker/run/docker.sock` and
-  `/var/run/docker.sock` in order. See `Docker.Daemon.endpoint/1` for the
-  full resolution order.
-
-      # Local default socket
       Docker.ping()
-
-      # Remote TCP
-      Docker.ping(host: "tcp://10.0.0.1:2375")
-
-      # Remote TCP with mTLS
-      Docker.ping(
-        host: "tcp://10.0.0.1:2376",
-        tls: %{
-          verify: :verify_peer,
-          cacertfile: "/certs/ca.pem",
-          certfile: "/certs/cert.pem",
-          keyfile: "/certs/key.pem"
-        }
-      )
 
   ## Module map
 
   The public API is split across domain modules. Every function is also
-  available directly on this module (e.g. `Docker.create_container/4` and
-  `Docker.Container.create_container/4` are the same call):
+  available directly on this module (e.g. `Docker.create_container/5` and
+  `Docker.Containers.create_container/5` are the same call):
 
-    * `Docker.Container` — Create, start, stop, delete, and inspect containers.
+    * `Docker.Containers` — Create, start, stop, delete, and inspect containers.
     * `Docker.Image` — Pull, build, list, and delete images.
     * `Docker.Network` — Create isolated networks and connect containers to them.
-    * `Docker.Terminal` — Run commands and open interactive shells (recommended
+    * `Docker.Exec` — Run a command in a container (`exec_run/3`, recommended
       for most callers).
-    * `Docker.Exec` — Lower-level command execution (prefer `Docker.Terminal`).
+    * `Docker.Terminal` — Persistent shells that keep state across commands.
     * `Docker.Session` — Raw bidirectional streaming sessions (advanced use).
-    * `Docker.Streaming.Session` — The I/O handle returned by `terminal_open/2`
-      and `attach/2`.
-    * `Docker.Daemon` — Connectivity checks and version info.
+    * `Docker.Streaming.Session` — The I/O handle returned by `attach/2` and
+      `exec_session/3`.
+    * `Docker.Info` — Connectivity checks and version info.
     * `Docker.Sandbox` — Canned responses for tests that run without a daemon.
 
   ## Testing without a daemon
@@ -220,7 +201,7 @@ defmodule Docker do
   @typedoc "Return type for image operations that return both an image reference and output."
   @type image_result :: {:ok, {image_ref(), image_output()}} | {:error, error_reason()}
 
-  @typedoc "Options keyword list accepted by every public function. Common keys: `:host`, `:socket`, `:tls`, `:version`, `:endpoint`, `:sandbox`. See the \"Connecting to a daemon\" section in `Docker`."
+  @typedoc "Options keyword list accepted by every public function. Common keys: `:version`, `:sandbox`."
   @type options :: keyword()
 
   @typedoc "A plain map of query parameters forwarded to the Docker Engine HTTP API."
@@ -238,7 +219,7 @@ defmodule Docker do
   @typedoc "A string ID for an exec instance, returned by `exec_create/3`. Pass it to `exec_start/2` or `exec_inspect/2`."
   @type exec_id :: binary()
 
-  @typedoc "A container name or ID. The name you passed to `create_container/4` is accepted anywhere a container ID is — it is easier to use and remember."
+  @typedoc "A container name or ID. The name you passed to `create_container/5` is accepted anywhere a container ID is — it is easier to use and remember."
   @type container_ref :: binary()
 
   @typedoc "A network name or ID. The name you passed to `create_network/3` is accepted anywhere a network ID is."
@@ -254,12 +235,10 @@ defmodule Docker do
   @type labels :: %{binary() => binary()}
 
   # ---------------------------------------------------------------------------
-  # Daemon
+  # Info
   # ---------------------------------------------------------------------------
 
-  defdelegate endpoint(options \\ []), to: Docker.Daemon
-  defdelegate ping(options \\ []), to: Docker.Daemon
-  defdelegate version(options \\ []), to: Docker.Daemon
+  defdelegate ping(options \\ []), to: Docker.Info
 
   # ---------------------------------------------------------------------------
   # Exec
@@ -280,26 +259,18 @@ defmodule Docker do
   defdelegate send_message(container_ref, message, mode, options \\ []), to: Docker.Session
 
   # ---------------------------------------------------------------------------
-  # Terminal (unified one-shot + persistent interface)
+  # Terminal (persistent shell sessions)
   # ---------------------------------------------------------------------------
-
-  defdelegate terminal_run(container_ref, cmd, options \\ []),
-    to: Docker.Terminal,
-    as: :run
-
-  defdelegate terminal_run_with_status(container_ref, cmd, options \\ []),
-    to: Docker.Terminal,
-    as: :run_with_status
 
   defdelegate terminal_open(container_ref, options \\ []),
     to: Docker.Terminal,
     as: :open
 
-  defdelegate terminal_command(terminal, line, options \\ []),
+  defdelegate terminal_command(container_ref, line, options \\ []),
     to: Docker.Terminal,
     as: :command
 
-  defdelegate terminal_close(terminal),
+  defdelegate terminal_close(container_ref),
     to: Docker.Terminal,
     as: :close
 
@@ -337,24 +308,21 @@ defmodule Docker do
   # Container
   # ---------------------------------------------------------------------------
 
-  defdelegate list_containers(params \\ %{}, options \\ []), to: Docker.Container
-  defdelegate find_container(container_ref, options \\ []), to: Docker.Container
-  defdelegate create_container(name, image, labels, options \\ []), to: Docker.Container
-  defdelegate start_container(container_ref, options \\ []), to: Docker.Container
-  defdelegate stop_container(container_ref, options \\ []), to: Docker.Container
+  defdelegate list_containers(params \\ %{}, options \\ []), to: Docker.Containers
+  defdelegate find_container(container_ref, options \\ []), to: Docker.Containers
+  defdelegate create_container(group, name, image, labels, options \\ []), to: Docker.Containers
+  defdelegate start_container(container_ref, options \\ []), to: Docker.Containers
+  defdelegate stop_container(container_ref, options \\ []), to: Docker.Containers
 
   defdelegate delete_container(container_ref, params \\ %{}, options \\ []),
-    to: Docker.Container
+    to: Docker.Containers
 
   defdelegate container_logs(container_ref, params \\ %{}, options \\ []),
-    to: Docker.Container
+    to: Docker.Containers
 
-  defdelegate container_running?(container), to: Docker.Container
-  defdelegate container_running?(container_ref, options), to: Docker.Container
+  defdelegate container_running?(container), to: Docker.Containers
+  defdelegate container_running?(container_ref, options), to: Docker.Containers
 
-  defdelegate put_archive(container_ref, dest_path, tar, options \\ []),
-    to: Docker.Container
-
-  @doc false
-  defdelegate build_create_container_config(name, image, labels, options), to: Docker.Container
+  defdelegate put_archive(container_ref, dest_path, tar_path, options \\ []),
+    to: Docker.Containers
 end

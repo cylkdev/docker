@@ -10,6 +10,12 @@ defmodule Docker.Util do
   end
 
   @doc false
-  def maybe_put(map, _key, nil), do: map
-  def maybe_put(map, key, value), do: Map.put(map, key, value)
+  def encode_filters(filters) do
+    filters
+    |> Map.new(fn
+      {:label, labels} -> {"label", Enum.map(labels, fn {k, v} -> "#{k}=#{v}" end)}
+      {key, value} -> {key |> to_string() |> String.replace("_", "-"), value}
+    end)
+    |> JSON.encode!()
+  end
 end

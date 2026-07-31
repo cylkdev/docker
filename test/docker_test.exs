@@ -5,23 +5,6 @@ defmodule DockerTest do
 
   @sandbox [sandbox: [enabled: true]]
 
-  describe "endpoint/1" do
-    test "delegates to Docker.Endpoint.from_options when sandbox is off" do
-      # Without sandbox: real resolution. With explicit socket override the
-      # call must succeed and return a unix endpoint pointing at that path.
-      assert {:ok, %OneOhOne.Endpoint{transport: :unix, socket_path: "/tmp/x.sock"}} =
-               Docker.endpoint(socket: "/tmp/x.sock")
-    end
-
-    test "returns the registered response in sandbox mode" do
-      endpoint = %OneOhOne.Endpoint{transport: :tcp, host: "h", port: 2375}
-
-      Sandbox.set_endpoint_responses([fn -> {:ok, endpoint} end])
-
-      assert {:ok, ^endpoint} = Docker.endpoint(@sandbox)
-    end
-  end
-
   describe "ping/1" do
     test "returns the registered response" do
       Sandbox.set_ping_responses([fn -> {:ok, "OK"} end])
@@ -36,20 +19,43 @@ defmodule DockerTest do
     end
   end
 
-  describe "version/1" do
-    test "returns metadata" do
-      Sandbox.set_version_responses([fn -> {:ok, %{"Version" => "27.0.0"}} end])
-
-      assert {:ok, %{"Version" => "27.0.0"}} = Docker.version(@sandbox)
-    end
-  end
-
   describe "list_images/2" do
     test "returns a list" do
       images = [%{"Id" => "i1"}, %{"Id" => "i2"}]
       Sandbox.set_list_images_responses([fn -> {:ok, images} end])
 
       assert {:ok, ^images} = Docker.list_images(%{all: true}, @sandbox)
+    end
+
+    test "encodes the :reference filter" do
+      Sandbox.set_list_images_responses([fn params -> {:ok, params} end])
+
+      assert {:ok, params} = Docker.list_images(%{filters: [reference: ["alpine*"]]}, @sandbox)
+
+      assert params[:filters] == ~s({"reference":["alpine*"]})
+    end
+
+    test "rewrites :shared_size to the Engine's spelling and leaves identity alone" do
+      Sandbox.set_list_images_responses([fn params -> {:ok, params} end])
+
+      assert {:ok, params} =
+               Docker.list_images(
+                 %{shared_size: true, identity: true, manifests: true},
+                 @sandbox
+               )
+
+      assert params == %{"shared-size": true, identity: true, manifests: true}
+    end
+
+    test "shared-size and identity reach the URL with the Engine's spelling" do
+      url =
+        Docker.Util.append_query_string(
+          "/images/json",
+          %{"shared-size": true, identity: true, manifests: true}
+        )
+
+      assert url == "/images/json?identity=true&manifests=true&shared-size=true"
+      refute url =~ "shared_size"
     end
   end
 
@@ -58,6 +64,14 @@ defmodule DockerTest do
       Sandbox.set_list_networks_responses([fn -> {:ok, [%{"Id" => "n1"}]} end])
 
       assert {:ok, [%{"Id" => "n1"}]} = Docker.list_networks(%{}, @sandbox)
+    end
+
+    test "encodes the :driver filter" do
+      Sandbox.set_list_networks_responses([fn params -> {:ok, params} end])
+
+      assert {:ok, params} = Docker.list_networks(%{filters: [driver: ["bridge"]]}, @sandbox)
+
+      assert params[:filters] == ~s({"driver":["bridge"]})
     end
   end
 
@@ -68,74 +82,61 @@ defmodule DockerTest do
       assert {:ok, [%{"Id" => "abc"}]} = Docker.list_containers(%{all: true}, @sandbox)
     end
 
-    test "encodes the :labels option into the params filters JSON" do
+    test "renders the :label map as key=value strings" do
       Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
 
       assert {:ok, params} =
                Docker.list_containers(
-                 %{all: true},
-                 Keyword.merge(@sandbox, labels: ["resource_group=group_1"])
+                 %{all: true, filters: [label: %{"resource_group" => "group_1"}]},
+                 @sandbox
                )
 
       assert params[:all] == true
       assert params[:filters] == ~s({"label":["resource_group=group_1"]})
     end
 
-    test "encodes multiple labels" do
+    test "renders multiple labels" do
       Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
 
       assert {:ok, params} =
                Docker.list_containers(
-                 %{},
-                 Keyword.merge(@sandbox, labels: ["resource_group=group_1", "tier=web"])
+                 %{filters: [label: %{"resource_group" => "group_1", "tier" => "web"}]},
+                 @sandbox
                )
 
-      assert params[:filters] == ~s({"label":["resource_group=group_1","tier=web"]})
+      assert JSON.decode!(params[:filters])["label"]
+             |> Enum.sort() == ["resource_group=group_1", "tier=web"]
     end
 
-    test "option :labels overrides any :filters value in params" do
+    test "merges a label filter with another filter instead of dropping one" do
       Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
 
       assert {:ok, params} =
                Docker.list_containers(
-                 %{filters: ~s({"label":["overridden=yes"]})},
-                 Keyword.merge(@sandbox, labels: ["resource_group=group_1"])
+                 %{filters: [label: %{"tier" => "web"}, status: ["running"]]},
+                 @sandbox
                )
 
-      assert params[:filters] == ~s({"label":["resource_group=group_1"]})
+      assert JSON.decode!(params[:filters]) == %{
+               "label" => ["tier=web"],
+               "status" => ["running"]
+             }
     end
 
-    test "option :labels overrides a stringy \"filters\" key in params" do
+    test "underscored filter keys become hyphenated on the wire" do
       Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
 
-      assert {:ok, params} =
-               Docker.list_containers(
-                 %{"filters" => ~s({"label":["overridden=yes"]})},
-                 Keyword.merge(@sandbox, labels: ["kept=true"])
-               )
+      assert {:ok, params} = Docker.list_containers(%{filters: [is_task: ["true"]]}, @sandbox)
 
-      assert params[:filters] == ~s({"label":["kept=true"]})
-      refute Map.has_key?(params, "filters")
+      assert params[:filters] == ~s({"is-task":["true"]})
     end
 
-    test "passes params through unchanged when :labels option is absent" do
+    test "sends no filters key when only plain params are given" do
       Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
 
-      passthrough = %{all: true, filters: "raw-value"}
+      assert {:ok, params} = Docker.list_containers(%{all: true, limit: 5}, @sandbox)
 
-      assert {:ok, ^passthrough} = Docker.list_containers(passthrough, @sandbox)
-    end
-
-    test "raises when :labels is not a list" do
-      assert_raise CaseClauseError, fn ->
-        Docker.list_containers(%{}, Keyword.merge(@sandbox, labels: "raw"))
-      end
-    end
-
-    test "raises when :labels contains non-strings" do
-      assert_raise FunctionClauseError, fn ->
-        Docker.list_containers(%{}, Keyword.merge(@sandbox, labels: [:not_a_string]))
-      end
+      assert params == %{all: true, limit: 5}
     end
   end
 
@@ -218,33 +219,14 @@ defmodule DockerTest do
     end
   end
 
-  describe "create_container/4" do
+  describe "create_container/5" do
     test "returns the new id" do
       Sandbox.set_create_container_responses([
-        fn _name, _image, _labels, _opts -> {:ok, "fake_id"} end
+        fn _group, _name, _image, _labels, _opts -> {:ok, "fake_id"} end
       ])
 
       assert {:ok, "fake_id"} =
-               Docker.create_container("c1", "alpine", %{}, @sandbox)
-    end
-
-    test "interactive_shell: invalid value raises before sandbox dispatch" do
-      # Argument validation that raises happens in legacy paths only on
-      # the live request path (do_create_container). Sandbox mode skips
-      # those raises by design — callers wanting to test option validation
-      # should hit the non-sandbox path; this test documents that the
-      # sandbox path returns whatever the registered fn returns.
-      Sandbox.set_create_container_responses([
-        fn _name, _image, _labels, _opts -> {:ok, "fake_id"} end
-      ])
-
-      assert {:ok, "fake_id"} =
-               Docker.create_container(
-                 "c1",
-                 "alpine",
-                 %{},
-                 [interactive_shell: 123] ++ @sandbox
-               )
+               Docker.create_container("g1", "c1", "alpine", %{}, @sandbox)
     end
   end
 
@@ -384,6 +366,44 @@ defmodule DockerTest do
 
       assert {:error, %{status: 404}} =
                Docker.put_archive("c1", "/no/such/dir", "fake-tar-bytes", @sandbox)
+    end
+  end
+
+  describe "Archive.create_tar/3" do
+    test "builds a tar from a local directory rooted at its basename" do
+      dir = Path.join(System.tmp_dir!(), "put_archive_test_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(dir, "nested"))
+      File.write!(Path.join(dir, "hello.txt"), "hi")
+      File.write!(Path.join([dir, "nested", "deep.txt"]), "deep")
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      base = Path.basename(dir)
+      tar_path = dir <> ".tar"
+      on_exit(fn -> File.rm(tar_path) end)
+
+      assert :ok = Docker.Archive.create_tar(tar_path, dir, verbose: false)
+
+      assert {:ok, entries} = :erl_tar.table(String.to_charlist(tar_path), [:compressed])
+      entries = Enum.map(entries, &to_string/1)
+
+      assert "#{base}/hello.txt" in entries
+      assert "#{base}/nested/deep.txt" in entries
+    end
+
+    test "builds a tar from a single local file" do
+      path =
+        Path.join(System.tmp_dir!(), "put_archive_file_#{System.unique_integer([:positive])}")
+
+      File.write!(path, "hi")
+      on_exit(fn -> File.rm!(path) end)
+
+      tar_path = path <> ".tar"
+      on_exit(fn -> File.rm(tar_path) end)
+
+      assert :ok = Docker.Archive.create_tar(tar_path, path, verbose: false)
+
+      assert {:ok, entries} = :erl_tar.table(String.to_charlist(tar_path), [:compressed])
+      assert Enum.map(entries, &to_string/1) == [Path.basename(path)]
     end
   end
 
@@ -536,26 +556,26 @@ defmodule DockerTest do
     end
   end
 
-  describe "build_create_container_config/4 (labels)" do
-    test "writes the supplied labels into the payload verbatim" do
+  describe "Container.to_map/1 (labels)" do
+    test "writes the supplied labels into the payload alongside the group label" do
       labels = %{"team" => "platform", "com.docker.kind" => "worker"}
-      config = Docker.build_create_container_config("session-xyz", "alpine", labels, [])
 
-      assert config["Labels"] === labels
+      config =
+        "my-group"
+        |> Docker.Container.new("session-xyz", "alpine", labels, [])
+        |> Docker.Container.to_map()
+
+      assert config["Labels"] ===
+               Map.put(labels, "app.docker.group", "my-group")
     end
 
-    test "writes an empty map when no labels are supplied" do
-      config = Docker.build_create_container_config("session-xyz", "alpine", %{}, [])
+    test "writes only the group label when no labels are supplied" do
+      config =
+        "my-group"
+        |> Docker.Container.new("session-xyz", "alpine", %{}, [])
+        |> Docker.Container.to_map()
 
-      assert config["Labels"] === %{}
-    end
-  end
-
-  describe "create_container/4 name validation" do
-    test "raises when name is not a binary" do
-      assert_raise FunctionClauseError, fn ->
-        Docker.create_container(nil, "alpine", %{}, @sandbox)
-      end
+      assert config["Labels"] === %{"app.docker.group" => "my-group"}
     end
   end
 end

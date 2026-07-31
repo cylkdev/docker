@@ -12,13 +12,8 @@ defmodule Docker.Client do
       stream through `Docker.Frame` to reverse Docker's stdout/stderr
       multiplexing.
 
-  Internally, every call resolves an endpoint via `Docker.Endpoint`
-  and delegates to `Req.request/1`. Unix-socket daemons are reached via
-  Req's `:unix_socket` option; TLS material on `:tcp` daemons is passed
-  via `connect_options[:transport_opts]`. `ssh://` daemons are not
-  supported by this module — both `request/4` and `stream/4` return
-  `{:error, :ssh_not_supported_for_unary}`. Long-lived SSH-tunnelled
-  streams use `Docker.Streaming` (OneOhOne) instead.
+  Internally, every call delegates to `Req.request/1`, reaching the daemon
+  over Req's `:unix_socket` option at `Docker.Config.socket_path/0`.
 
   ## Examples
 
@@ -38,16 +33,14 @@ defmodule Docker.Client do
   #   Req-shaped requests and back.
   #
   # Data Invariant:
-  #   1. Every call resolves a Docker.Endpoint before any I/O.
-  #   2. The path passed to Req starts with /v<digits> exactly when this
+  #   1. The path passed to Req starts with /v<digits> exactly when this
   #      module prepended it OR the caller already supplied it.
-  #   3. Frame post-processing runs only on 2xx responses; non-2xx bodies
+  #   2. Frame post-processing runs only on 2xx responses; non-2xx bodies
   #      pass through unchanged.
 
-  alias Docker.Endpoint, as: EngineEndpoint
+  alias Docker.Config
   alias Docker.Frame
   alias Docker.NDJSON
-  alias OneOhOne.Endpoint, as: MintyEndpoint
 
   @type method :: :get | :post | :put | :delete | :patch | :head | :options
   @type body :: nil | binary() | iodata() | {:json, term()} | {:tar, binary()}
@@ -70,21 +63,12 @@ defmodule Docker.Client do
 
     * `{:ok, response}` — Status was 200..299.
     * `{:error, response}` — Status was outside 200..299.
-    * `{:error, reason}` — Endpoint resolution failed or transport failed.
+    * `{:error, reason}` — Transport failed.
   """
   @spec request(method(), String.t(), body(), keyword()) ::
           {:ok, response()} | {:error, response() | term()}
   def request(method, path, body \\ nil, options \\ []) do
-    case EngineEndpoint.from_options(options) do
-      {:ok, engine_endpoint} ->
-        case minty(engine_endpoint) do
-          %MintyEndpoint{transport: :ssh} -> {:error, :ssh_not_supported_for_unary}
-          _ -> do_request(method, path, body, engine_endpoint, options)
-        end
-
-      {:error, _reason} = error ->
-        error
-    end
+    do_request(method, path, body, options)
   end
 
   @doc """
@@ -103,31 +87,22 @@ defmodule Docker.Client do
 
     * `{:ok, stream}` — Status was 200..299. Consume with `Enum.*` / `Stream.*`.
     * `{:error, response}` — Non-2xx status; body fully read.
-    * `{:error, reason}` — Endpoint resolution or transport failed.
+    * `{:error, reason}` — Transport failed.
   """
   @spec stream(method(), String.t(), body(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, response() | term()}
   def stream(method, path, body \\ nil, options \\ []) do
-    case EngineEndpoint.from_options(options) do
-      {:ok, engine_endpoint} ->
-        case minty(engine_endpoint) do
-          %MintyEndpoint{transport: :ssh} -> {:error, :ssh_not_supported_for_unary}
-          _ -> do_stream(method, path, body, engine_endpoint, options)
-        end
-
-      {:error, _reason} = error ->
-        error
-    end
+    do_stream(method, path, body, options)
   end
 
   # ---------------------------------------------------------------------------
   # request/4
   # ---------------------------------------------------------------------------
 
-  defp do_request(method, path, body, engine_endpoint, options) do
-    full_path = prepend_version(path, engine_endpoint, options)
+  defp do_request(method, path, body, options) do
+    full_path = prepend_version(path, options)
     into_mode = Keyword.get(options, :into, :auto)
-    req_opts = build_req_opts(engine_endpoint, method, full_path, body, options, into_mode)
+    req_opts = build_req_opts(method, full_path, body, options, into_mode)
 
     case Req.request(req_opts) do
       {:ok, %Req.Response{status: status, body: response_body, headers: headers}} ->
@@ -157,10 +132,10 @@ defmodule Docker.Client do
   # stream/4
   # ---------------------------------------------------------------------------
 
-  defp do_stream(method, path, body, engine_endpoint, options) do
-    full_path = prepend_version(path, engine_endpoint, options)
+  defp do_stream(method, path, body, options) do
+    full_path = prepend_version(path, options)
     into_mode = Keyword.get(options, :into, :ndjson)
-    req_opts = build_req_opts(engine_endpoint, method, full_path, body, options, into_mode)
+    req_opts = build_req_opts(method, full_path, body, options, into_mode)
 
     stream_opts = Keyword.put(req_opts, :into, :self)
 
@@ -287,17 +262,15 @@ defmodule Docker.Client do
   # Req option building
   # ---------------------------------------------------------------------------
 
-  defp build_req_opts(engine_endpoint, method, full_path, body, options, into_mode) do
-    minty = minty(engine_endpoint)
-
+  defp build_req_opts(method, full_path, body, options, into_mode) do
     base_opts =
       [
         method: method,
-        url: url_for(minty, full_path),
+        url: "http://localhost" <> full_path,
+        unix_socket: Config.socket_path(),
         retry: false,
         decode_body: into_mode in [:auto, :json]
       ]
-      |> Keyword.merge(transport_opts_for(minty))
       |> Keyword.merge(body_opts(body))
       |> Keyword.merge(headers_opt(options))
 
@@ -306,31 +279,6 @@ defmodule Docker.Client do
       :infinity -> Keyword.put(base_opts, :receive_timeout, :infinity)
       ms when is_integer(ms) -> Keyword.put(base_opts, :receive_timeout, ms)
     end
-  end
-
-  defp url_for(%MintyEndpoint{transport: :unix}, full_path), do: "http://localhost" <> full_path
-
-  defp url_for(%MintyEndpoint{transport: :tcp, scheme: scheme, host: host, port: port}, full_path) do
-    scheme_str = if scheme === :https, do: "https", else: "http"
-    "#{scheme_str}://#{host}:#{port}#{full_path}"
-  end
-
-  defp transport_opts_for(%MintyEndpoint{transport: :unix, socket_path: path}),
-    do: [unix_socket: path]
-
-  defp transport_opts_for(%MintyEndpoint{transport: :tcp, tls: nil}), do: []
-
-  defp transport_opts_for(%MintyEndpoint{transport: :tcp, tls: tls}) when is_map(tls) do
-    candidates = [
-      verify: tls[:verify],
-      cacertfile: tls[:cacertfile],
-      certfile: tls[:certfile],
-      keyfile: tls[:keyfile]
-    ]
-
-    transport_opts = Enum.reject(candidates, fn {_, v} -> is_nil(v) end)
-
-    [connect_options: [transport_opts: transport_opts]]
   end
 
   defp body_opts(nil), do: []
@@ -370,20 +318,18 @@ defmodule Docker.Client do
   # Path / version prefix
   # ---------------------------------------------------------------------------
 
-  @spec prepend_version(String.t(), EngineEndpoint.t(), keyword()) :: String.t()
-  defp prepend_version(path, %EngineEndpoint{} = engine_endpoint, options) do
+  @spec prepend_version(String.t(), keyword()) :: String.t()
+  defp prepend_version(path, options) do
     if Regex.match?(~r{^/v\d}, path) do
       path
     else
       version =
         case Keyword.get(options, :version) do
-          nil -> EngineEndpoint.version(engine_endpoint)
+          nil -> Config.version()
           v when is_binary(v) and v !== "" -> v
         end
 
       "/v" <> version <> path
     end
   end
-
-  defp minty(engine_endpoint), do: EngineEndpoint.to_minty(engine_endpoint)
 end

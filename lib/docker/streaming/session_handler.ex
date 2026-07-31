@@ -14,7 +14,9 @@ defmodule Docker.Streaming.SessionHandler do
   ## Message protocol
 
   Every message uses the connection pid as its second element so an
-  owner can demultiplex bytes from multiple concurrent sessions:
+  owner can demultiplex bytes from multiple concurrent sessions.
+  Callbacks run inside the connection process, so that pid is
+  `self()`:
 
     * `{:docker_stream, conn_pid, :data, bytes}` — bytes arrived
       from the daemon. Already past any HTTP framing.
@@ -42,24 +44,25 @@ defmodule Docker.Streaming.SessionHandler do
   end
 
   @impl true
-  def handle_in(bytes, %Socket{transport_pid: transport_pid} = socket) when is_binary(bytes) do
+  def handle_in(bytes, %Socket{} = socket) when is_binary(bytes) do
+    conn = self()
+
     Docker.Log.debug(
       @logger_prefix,
-      "Handling incoming data | transport_pid=#{inspect(transport_pid)}, bytes_size=#{byte_size(bytes)}"
+      "Handling incoming data | conn=#{inspect(conn)}, bytes_size=#{byte_size(bytes)}"
     )
 
-    forward(socket, {:docker_stream, transport_pid, :data, bytes})
+    forward(socket, {:docker_stream, conn, :data, bytes})
     {:ok, socket}
   end
 
   @impl true
-  def terminate(_reason, %Socket{transport_pid: transport_pid} = socket) do
-    Docker.Log.debug(
-      @logger_prefix,
-      "Terminating session | transport_pid=#{inspect(transport_pid)}"
-    )
+  def terminate(_reason, %Socket{} = socket) do
+    conn = self()
 
-    forward(socket, {:docker_stream, transport_pid, :closed})
+    Docker.Log.debug(@logger_prefix, "Terminating session | conn=#{inspect(conn)}")
+
+    forward(socket, {:docker_stream, conn, :closed})
     :ok
   end
 

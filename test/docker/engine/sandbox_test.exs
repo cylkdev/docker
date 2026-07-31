@@ -10,10 +10,8 @@ defmodule Docker.SandboxTest do
   # ---------------------------------------------------------------------------
   @actions [
     {:ping, 1},
-    {:version, 1},
     {:socket_available?, 1},
     {:socket_path, 1},
-    {:endpoint, 1},
     {:list_containers, 2},
     {:list_images, 2},
     {:list_networks, 2},
@@ -23,7 +21,7 @@ defmodule Docker.SandboxTest do
     {:delete_container, 3},
     {:container_logs, 3},
     {:container_running?, 2},
-    {:create_container, 4},
+    {:create_container, 5},
     {:find_image, 2},
     {:pull_image, 3},
     {:build_image, 5},
