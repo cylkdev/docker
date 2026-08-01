@@ -41,7 +41,7 @@ defmodule Docker.Network do
         `:label`, `:name`, `:scope`, `:type`. `:label` takes a
         `%{binary() => binary()}` map; every other filter takes a list of
         strings.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -88,7 +88,7 @@ defmodule Docker.Network do
   ## Parameters
 
     - `network_id` — the network name (e.g. `"my-net"`) or its full ID.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -236,7 +236,7 @@ defmodule Docker.Network do
 
     - `network_id` — the network name or ID.
     - `container_ref` — the container name or ID to connect.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -280,7 +280,7 @@ defmodule Docker.Network do
   ## Parameters
 
     - `network_id` — the network name or ID to remove.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 

@@ -82,7 +82,7 @@ defmodule Docker.Image do
         `:reference`, `:since`, `:until`. `:label` takes a
         `%{binary() => binary()}` map; every other filter takes a list of
         strings.
-    - `options` — optional keyword list for daemon selection. See `Docker`
+    - `options` — optional keyword list. See `Docker`
       for the options table.
 
   ## Returns
@@ -149,7 +149,7 @@ defmodule Docker.Image do
       - `"alpine"` — name only (Docker resolves to `"latest"` tag).
       - `"sha256:abc123…"` — full image ID.
       - `"abc123"` — unique ID prefix (as long as it is unambiguous).
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -204,7 +204,7 @@ defmodule Docker.Image do
     - `image` — the image to pull. Examples: `"alpine:3.19"`,
       `"ubuntu:22.04"`, `"my-registry.example.com/myapp:v2"`.
     - `params` — optional map of additional Docker Engine query parameters.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -265,7 +265,7 @@ defmodule Docker.Image do
     - `tag` — the name and tag to give the resulting image. Example:
       `"my-app:latest"` or `"my-app:v1.2.0"`. Required.
     - `params` — optional map of additional Docker Engine build parameters.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -340,7 +340,7 @@ defmodule Docker.Image do
     - `dockerfile` — path to the Dockerfile, relative to `context_path`.
     - `tag` — name and tag for the resulting image.
     - `params` — optional map of additional Docker Engine build parameters.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -396,7 +396,7 @@ defmodule Docker.Image do
       `"nginx:alpine"`.
     - `params` — optional map forwarded to `build_image/5` or
       `pull_image/3`.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -565,7 +565,7 @@ defmodule Docker.Image do
       `"alpine:3.19"`, `"my-app:latest"`, `"sha256:abc123"`.
     - `params` — optional map. Key: `force` (boolean) to remove even if
       stopped containers were created from this image.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 

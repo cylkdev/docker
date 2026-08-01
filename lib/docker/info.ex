@@ -36,11 +36,7 @@ defmodule Docker.Info do
 
   ## Examples
 
-      # Connect to the local Docker daemon
       {:ok, "OK"} = Docker.Info.ping()
-
-      # Connect to a remote daemon
-      {:ok, "OK"} = Docker.Info.ping(host: "tcp://10.0.0.1:2375")
   """
   @spec ping(Docker.options()) :: Docker.result(binary())
   def ping(options \\ []) do

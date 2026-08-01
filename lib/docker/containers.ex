@@ -131,7 +131,7 @@ defmodule Docker.Containers do
         takes a list of strings. Several filters may be combined and all must
         match (AND). Underscored keys are hyphenated on the wire (`:is_task`
         -> `is-task`).
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -197,7 +197,7 @@ defmodule Docker.Containers do
   ## Parameters
 
     - `container_ref` — the container name or ID (full or unique prefix).
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -253,7 +253,7 @@ defmodule Docker.Containers do
     - `container_ref` — the container name or ID to remove.
     - `params` — optional map. Key: `force` (boolean). When `true`, the
       running container is killed before removal (default `false`).
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -436,7 +436,7 @@ defmodule Docker.Containers do
   ## Parameters
 
     - `container_ref` — the container name or ID.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -480,7 +480,7 @@ defmodule Docker.Containers do
   ## Parameters
 
     - `container_ref` — the container name or ID.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 
@@ -527,8 +527,9 @@ defmodule Docker.Containers do
     - `dest_path` — the absolute path inside the container where the
       archive will be extracted. Example: `"/app"` or `"/etc/myapp"`.
     - `tar_path` — path to a pre-built tar archive on the local filesystem.
-      Build one with `Docker.Util.create_tar/3`.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+      Entries are extracted relative to `dest_path`, so an archive whose
+      entries are rooted at `assets/` unpacks into `<dest_path>/assets/`.
+    - `options` — optional keyword list. See `Docker` for the options table.
       Also accepts `:no_overwrite_dir_non_dir` and `:copy_uid_gid` (boolean)
       forwarded to the Docker Engine API.
 
@@ -542,7 +543,7 @@ defmodule Docker.Containers do
 
   ## Examples
 
-      :ok = Docker.Util.create_tar("/tmp/assets.tar", "./assets")
+      :ok = :erl_tar.create(~c"/tmp/assets.tar", [{~c"assets", ~c"./assets"}], [:compressed])
 
       # Extracts to /tmp/assets/...
       {:ok, _} = Docker.Containers.put_archive("my-container", "/tmp", "/tmp/assets.tar")
@@ -625,7 +626,7 @@ defmodule Docker.Containers do
   ## Parameters
 
     - `container_ref` — the container name or ID.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Examples
 

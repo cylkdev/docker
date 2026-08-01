@@ -106,7 +106,7 @@ defmodule Docker.Exec do
   ## Parameters
 
     - `exec_id` — the ID returned by `exec_create/3`.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
       Also accepts `:detach` (boolean) to start without waiting for output.
 
   ## Returns
@@ -163,7 +163,7 @@ defmodule Docker.Exec do
   ## Parameters
 
     - `exec_id` — the ID returned by `exec_create/3`.
-    - `options` — optional keyword list for daemon selection. See `Docker`.
+    - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
 

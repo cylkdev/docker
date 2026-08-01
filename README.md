@@ -78,7 +78,7 @@ to opt a call into sandbox mode:
 defmodule MyAppTest do
   use ExUnit.Case, async: true
 
-  alias Docker.Minty.Sandbox
+  alias Docker.Sandbox
 
   test "reports daemon as up" do
     Sandbox.set_ping_responses([fn -> {:ok, "OK"} end])
