@@ -527,7 +527,7 @@ defmodule Docker.Containers do
     - `dest_path` — the absolute path inside the container where the
       archive will be extracted. Example: `"/app"` or `"/etc/myapp"`.
     - `tar_path` — path to a pre-built tar archive on the local filesystem.
-      Build one with `Docker.Archive.create_tar/3`.
+      Build one with `Docker.Util.create_tar/3`.
     - `options` — optional keyword list for daemon selection. See `Docker`.
       Also accepts `:no_overwrite_dir_non_dir` and `:copy_uid_gid` (boolean)
       forwarded to the Docker Engine API.
@@ -542,7 +542,7 @@ defmodule Docker.Containers do
 
   ## Examples
 
-      :ok = Docker.Archive.create_tar("/tmp/assets.tar", "./assets")
+      :ok = Docker.Util.create_tar("/tmp/assets.tar", "./assets")
 
       # Extracts to /tmp/assets/...
       {:ok, _} = Docker.Containers.put_archive("my-container", "/tmp", "/tmp/assets.tar")

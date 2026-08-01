@@ -369,7 +369,7 @@ defmodule DockerTest do
     end
   end
 
-  describe "Archive.create_tar/3" do
+  describe "Util.create_tar/3" do
     test "builds a tar from a local directory rooted at its basename" do
       dir = Path.join(System.tmp_dir!(), "put_archive_test_#{System.unique_integer([:positive])}")
       File.mkdir_p!(Path.join(dir, "nested"))
@@ -381,7 +381,7 @@ defmodule DockerTest do
       tar_path = dir <> ".tar"
       on_exit(fn -> File.rm(tar_path) end)
 
-      assert :ok = Docker.Archive.create_tar(tar_path, dir, verbose: false)
+      assert :ok = Docker.Util.create_tar(tar_path, dir, verbose: false)
 
       assert {:ok, entries} = :erl_tar.table(String.to_charlist(tar_path), [:compressed])
       entries = Enum.map(entries, &to_string/1)
@@ -400,7 +400,7 @@ defmodule DockerTest do
       tar_path = path <> ".tar"
       on_exit(fn -> File.rm(tar_path) end)
 
-      assert :ok = Docker.Archive.create_tar(tar_path, path, verbose: false)
+      assert :ok = Docker.Util.create_tar(tar_path, path, verbose: false)
 
       assert {:ok, entries} = :erl_tar.table(String.to_charlist(tar_path), [:compressed])
       assert Enum.map(entries, &to_string/1) == [Path.basename(path)]
