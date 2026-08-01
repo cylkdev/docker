@@ -47,7 +47,7 @@ defmodule Docker.Network do
 
     - `{:ok, [map]}` — list of network maps with string keys including
       `"Id"`, `"Name"`, `"Driver"`, and `"Containers"`.
-    - `{:error, reason}` — daemon not reachable or returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`.
 
   ## Examples
 
@@ -76,9 +76,8 @@ defmodule Docker.Network do
     url = Util.append_query_string("/networks", params)
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -95,8 +94,8 @@ defmodule Docker.Network do
     - `{:ok, map}` — network details map with string keys including `"Id"`,
       `"Name"`, `"Driver"`, and `"Containers"` (a map of container IDs
       currently connected).
-    - `{:error, %{status: 404, body: _}}` — no network matched.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      network matched.
 
   ## Examples
 
@@ -117,9 +116,8 @@ defmodule Docker.Network do
     url = "/networks/#{network_id}"
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -152,7 +150,9 @@ defmodule Docker.Network do
   ## Returns
 
     - `{:ok, network_id}` — the full ID of the newly created network.
-    - `{:error, reason}` — daemon not reachable or returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:bad_request` when
+      `:ipam_subnet` or `:ipam_gateway` is not a string, `:conflict` when
+      a network of that name already exists.
 
   ## Examples
 
@@ -190,41 +190,56 @@ defmodule Docker.Network do
       "Labels" => labels
     }
 
-    payload = put_network_ipam(payload, options)
+    with {:ok, payload} <- put_network_ipam(payload, options) do
+      case Client.request(:post, url, {:json, payload}, options) do
+        {:ok, %{body: %{"Id" => id}}} ->
+          {:ok, id}
 
-    case Client.request(:post, url, {:json, payload}, options) do
-      {:ok, %{status: code, body: %{"Id" => id}}} when code in 200..299 ->
-        {:ok, id}
+        # A 2xx that carries no ID leaves the caller no handle on the network.
+        {:ok, %{body: body}} ->
+          {:error,
+           ErrorMessage.internal_server_error(
+             "The Docker daemon created a network but returned no ID",
+             %{body: body, name: name}
+           )}
 
-      {:ok, %{status: code, body: body}} ->
-        {:error, %{status: code, body: body}}
-
-      {:error, reason} ->
-        {:error, reason}
+        {:error, %ErrorMessage{} = error} ->
+          {:error, error}
+      end
     end
   end
 
   defp put_network_ipam(payload, options) do
     case Keyword.get(options, :ipam_subnet, "172.28.0.0/20") do
       nil ->
-        payload
+        {:ok, payload}
 
       subnet when is_binary(subnet) ->
-        ipam_config = build_ipam_config(subnet, Keyword.get(options, :ipam_gateway))
-        Map.put(payload, "IPAM", %{"Config" => [ipam_config]})
+        with {:ok, config} <- build_ipam_config(subnet, Keyword.get(options, :ipam_gateway)) do
+          {:ok, Map.put(payload, "IPAM", %{"Config" => [config]})}
+        end
 
       other ->
-        raise "Expected ipam_subnet to be a string, got: #{inspect(other)}"
+        {:error,
+         ErrorMessage.bad_request(
+           "Expected :ipam_subnet to be a string, got: #{inspect(other)}",
+           %{ipam_subnet: other}
+         )}
     end
   end
 
-  defp build_ipam_config(subnet, nil), do: %{"Subnet" => subnet}
+  defp build_ipam_config(subnet, nil), do: {:ok, %{"Subnet" => subnet}}
 
   defp build_ipam_config(subnet, gateway) when is_binary(gateway),
-    do: %{"Subnet" => subnet, "Gateway" => gateway}
+    do: {:ok, %{"Subnet" => subnet, "Gateway" => gateway}}
 
-  defp build_ipam_config(_subnet, other),
-    do: raise("Expected ipam_gateway to be a string, got: #{inspect(other)}")
+  defp build_ipam_config(_subnet, other) do
+    {:error,
+     ErrorMessage.bad_request(
+       "Expected :ipam_gateway to be a string, got: #{inspect(other)}",
+       %{ipam_gateway: other}
+     )}
+  end
 
   @doc """
   Connects a running container to a network.
@@ -241,8 +256,8 @@ defmodule Docker.Network do
   ## Returns
 
     - `{:ok, _}` — container is now connected to the network.
-    - `{:error, %{status: 404, body: _}}` — network or container not found.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when the
+      network or the container does not exist.
 
   ## Examples
 
@@ -265,9 +280,8 @@ defmodule Docker.Network do
     payload = %{"Container" => container_ref}
 
     case Client.request(:post, url, {:json, payload}, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -285,17 +299,16 @@ defmodule Docker.Network do
   ## Returns
 
     - `:ok` — network removed.
-    - `{:error, %{status: 404, body: _}}` — network not found.
-    - `{:error, %{status: 409, body: _}}` — network still has active
-      endpoints (containers connected).
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such network exists, `:conflict` when it still has active endpoints
+      (containers connected).
 
   ## Examples
 
       :ok = Docker.Network.delete_network("my-net")
   """
   @spec delete_network(Docker.network_ref(), Docker.options()) ::
-          :ok | {:error, Docker.error_reason()}
+          :ok | {:error, ErrorMessage.t()}
   def delete_network(network_id, options \\ []) when is_binary(network_id) do
     if sandbox?(options) do
       sandbox_delete_network_response(network_id, options)
@@ -308,9 +321,8 @@ defmodule Docker.Network do
     url = "/networks/#{network_id}"
 
     case Client.request(:delete, url, nil, options) do
-      {:ok, %{status: code}} when code in 200..299 -> :ok
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, _response} -> :ok
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 

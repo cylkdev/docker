@@ -44,7 +44,7 @@ defmodule Docker.Session do
           iodata(),
           Session.recv_mode(),
           Docker.options()
-        ) :: {:ok, binary()} | {:ok, {binary(), binary()}} | {:error, Docker.error_reason()}
+        ) :: Docker.result(binary() | {binary(), binary()})
   def send_message(container_ref, message, mode, options \\ []) do
     with {:ok, session} <- attach(container_ref, options) do
       run_send_message(session, message, mode, options)
@@ -55,9 +55,6 @@ defmodule Docker.Session do
     with :ok <- Session.send(session, message),
          {:ok, output, _session} <- Session.recv(session, mode, options) do
       {:ok, output}
-    else
-      {:error, reason, _session} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
     end
   after
     Session.close(session)
@@ -70,8 +67,21 @@ defmodule Docker.Session do
 
       :error ->
         case Docker.Containers.find_container(container_ref, options) do
-          {:ok, %{"Config" => %{"Tty" => tty}}} when is_boolean(tty) -> {:ok, tty}
-          {:error, reason} -> {:error, reason}
+          {:ok, %{"Config" => %{"Tty" => tty}}} when is_boolean(tty) ->
+            {:ok, tty}
+
+          # Every container the daemon knows about reports Config.Tty, so a
+          # response without it is a shape this client does not understand
+          # rather than a container without a PTY.
+          {:ok, body} ->
+            {:error,
+             ErrorMessage.internal_server_error(
+               "The Docker daemon returned a container with no Config.Tty",
+               %{container_ref: container_ref, body: body}
+             )}
+
+          {:error, %ErrorMessage{} = error} ->
+            {:error, error}
         end
     end
   end

@@ -148,6 +148,40 @@ defmodule Docker do
   be open per name at a time. See `Docker.Terminal` for more options
   (custom shell, PTY allocation, read termination).
 
+  ## Errors
+
+  Every function in this library returns one of exactly three shapes:
+  `:ok`, `{:ok, value}`, or `{:error, error}` — where `error` is always an
+  [`ErrorMessage`](https://hexdocs.pm/error_message) struct. There is no
+  fourth shape to handle and no per-module error convention to learn.
+
+      %ErrorMessage{
+        code: :not_found,
+        message: "No such container: ghost",
+        details: %{status: 404, body: %{...}, method: :get, path: "/v1.51/containers/ghost/json"}
+      }
+
+  `:code` is an atom named after the HTTP status the daemon returned, so it
+  can be matched on directly:
+
+      case Docker.find_container("ghost") do
+        {:ok, container} -> container
+        {:error, %ErrorMessage{code: :not_found}} -> :no_such_container
+        {:error, %ErrorMessage{code: :service_unavailable}} -> :daemon_down
+        {:error, error} -> raise ErrorMessage.to_string(error)
+      end
+
+  `:details` always carries the context of the failed call. For daemon
+  responses that is `:status`, `:body`, `:method`, and `:path`; for
+  transport failures, `:reason` and `:socket_path`.
+
+  The one exception is a failure that happens *after* a stream has already
+  been handed back — `pull_image/3` and `build_image/5` return `{:ok, stream}`
+  as soon as the daemon accepts the request, so a truncated body has no
+  return value left to travel through. That raises `Docker.StreamError`,
+  whose `:error_message` field holds the same struct the return path would
+  have carried.
+
   ## Connecting to a daemon
 
   Every call reaches the local daemon over the Unix socket at
@@ -195,11 +229,8 @@ defmodule Docker do
   @typedoc "The body returned by image operations — a binary, a map, or a list of maps depending on the call."
   @type image_output :: binary() | map() | [map()]
 
-  @typedoc "An error reason returned by `{:error, reason}` tuples. The shape varies: an atom for simple errors, a map with `:status` and `:body` for HTTP errors, or a tuple or binary for lower-level failures."
-  @type error_reason :: atom() | binary() | map() | list() | tuple()
-
   @typedoc "Return type for image operations that return both an image reference and output."
-  @type image_result :: {:ok, {image_ref(), image_output()}} | {:error, error_reason()}
+  @type image_result :: {:ok, {image_ref(), image_output()}} | {:error, ErrorMessage.t()}
 
   @typedoc "Options keyword list accepted by every public function. Common keys: `:version`, `:sandbox`."
   @type options :: keyword()
@@ -228,8 +259,8 @@ defmodule Docker do
   @typedoc "The result of running a command: its combined stdout+stderr output, the exit code (0 = success), and whether the process was still running at inspect time."
   @type exec_result :: %{output: binary(), exit_code: integer() | nil, running: boolean() | nil}
 
-  @typedoc "The standard return type: `{:ok, value}` on success or `{:error, reason}` on failure."
-  @type result(t) :: {:ok, t} | {:error, error_reason()}
+  @typedoc "The standard return type: `{:ok, value}` on success or `{:error, error}` on failure, where `error` is always an `t:ErrorMessage.t/0`."
+  @type result(t) :: {:ok, t} | {:error, ErrorMessage.t()}
 
   @typedoc "A map of string label keys to string label values attached to a container or network at creation time. Example: `%{\"env\" => \"staging\", \"role\" => \"worker\"}`."
   @type labels :: %{binary() => binary()}

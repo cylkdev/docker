@@ -89,7 +89,7 @@ defmodule Docker.Image do
 
     - `{:ok, [map]}` — a list of image maps. Each map has string keys
       including `"Id"`, `"RepoTags"`, `"Size"`, and `"Created"`.
-    - `{:error, reason}` — daemon not reachable or returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`.
 
   ## Examples
 
@@ -133,9 +133,8 @@ defmodule Docker.Image do
     url = Util.append_query_string("/images/json", params)
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -155,8 +154,8 @@ defmodule Docker.Image do
 
     - `{:ok, map}` — image details map with string keys including `"Id"`,
       `"RepoTags"`, `"Size"`, `"Created"`, and `"Config"`.
-    - `{:error, %{status: 404, body: _}}` — no image matched `image_ref`.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      image matched `image_ref`.
 
   ## Examples
 
@@ -180,14 +179,8 @@ defmodule Docker.Image do
     url = "/images/#{image_ref}/json"
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 ->
-        {:ok, Serializer.deserialize(body, options)}
-
-      {:ok, %{status: code, body: body}} ->
-        {:error, %{status: code, body: body}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{body: body}} -> {:ok, Serializer.deserialize(body, options)}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -211,7 +204,8 @@ defmodule Docker.Image do
     - `{:ok, stream}` — an `Enumerable` of decoded event maps. Each map
       has a `"status"` key (e.g. `"Pulling fs layer"`, `"Pull complete"`)
       and optionally `"id"` (layer ID) and `"progressDetail"`.
-    - `{:error, reason}` — daemon not reachable or returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when the
+      image does not exist in the registry.
 
   ## Examples
 
@@ -230,7 +224,7 @@ defmodule Docker.Image do
       events = Enum.to_list(stream)
   """
   @spec pull_image(image :: binary(), Docker.params(), Docker.options()) ::
-          {:ok, Enumerable.t()} | {:error, term()}
+          {:ok, Enumerable.t()} | {:error, ErrorMessage.t()}
   def pull_image(image, params \\ %{}, options \\ []) do
     if sandbox?(options) do
       sandbox_pull_image_response(image, params, options)
@@ -272,8 +266,9 @@ defmodule Docker.Image do
     - `{:ok, stream}` — an `Enumerable` of decoded event maps, same format
       as `pull_image/3`. Each map has a `"stream"` key with build output
       lines (e.g. `"Step 1/3 : FROM alpine\\n"`).
-    - `{:error, reason}` — context path not found, Dockerfile outside
-      context, daemon not reachable, or daemon returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:bad_request` when
+      `tag` is empty, the context path is not a directory, or the
+      Dockerfile lies outside the context.
 
   ## Examples
 
@@ -291,34 +286,38 @@ defmodule Docker.Image do
       |> Stream.run()
   """
   @spec build_image(binary(), binary(), binary(), Docker.params(), Docker.options()) ::
-          {:ok, Enumerable.t()} | {:error, term()}
+          {:ok, Enumerable.t()} | {:error, ErrorMessage.t()}
   def build_image(context_path, dockerfile, tag, params \\ %{}, options \\ [])
       when is_binary(tag) and is_binary(context_path) do
-    unless tag !== "" do
-      raise "Expected tag to be a string, got: #{inspect(tag)}"
-    end
+    cond do
+      tag === "" ->
+        {:error, ErrorMessage.bad_request("Expected tag to be a non-empty string", %{tag: tag})}
 
-    if sandbox?(options) do
-      sandbox_build_image_response(context_path, dockerfile, tag, params, options)
-    else
-      do_build_image(context_path, dockerfile, tag, params, options)
+      sandbox?(options) ->
+        sandbox_build_image_response(context_path, dockerfile, tag, params, options)
+
+      true ->
+        do_build_image(context_path, dockerfile, tag, params, options)
     end
   end
 
   defp do_build_image(context_path, dockerfile, tag, params, options) do
     context_path = Path.expand(context_path)
-    dockerfile_rel = resolve_dockerfile_path(dockerfile, context_path)
 
-    query =
-      params
-      |> Map.drop([:tag, :t])
-      |> Map.merge(%{t: tag, dockerfile: dockerfile_rel})
-      |> URI.encode_query()
+    with {:ok, dockerfile_rel} <- resolve_dockerfile_path(dockerfile, context_path),
+         {:ok, tar} <- build_context_tar(context_path) do
+      query =
+        params
+        |> Map.drop([:tag, :t])
+        |> Map.merge(%{t: tag, dockerfile: dockerfile_rel})
+        |> URI.encode_query()
 
-    url = "/build?" <> query
-
-    with {:ok, tar} <- build_context_tar(context_path) do
-      Client.stream(:post, url, {:tar, tar}, Keyword.put_new(options, :into, :ndjson))
+      Client.stream(
+        :post,
+        "/build?" <> query,
+        {:tar, tar},
+        Keyword.put_new(options, :into, :ndjson)
+      )
     end
   end
 
@@ -346,9 +345,10 @@ defmodule Docker.Image do
 
     - `:ok` — the build stream completed and the daemon reported no build
       error.
-    - `{:error, reason}` — `build_image/5` could not produce a stream
-      (context missing, daemon unreachable, etc.), or the daemon emitted
-      an `"error"` event mid-build (e.g. a failing `RUN` step).
+    - `{:error, error}` — an `t:ErrorMessage.t/0`, either from
+      `build_image/5` failing to produce a stream or, as
+      `:unprocessable_entity`, from an `"error"` event the daemon emitted
+      mid-build (e.g. a failing `RUN` step).
 
   ## Examples
 
@@ -356,14 +356,18 @@ defmodule Docker.Image do
       :ok = Docker.Image.run_build_image("./my-app", "Dockerfile", "my-app:latest")
   """
   @spec run_build_image(binary(), binary(), binary(), Docker.params(), Docker.options()) ::
-          :ok | {:error, term()}
+          :ok | {:error, ErrorMessage.t()}
   def run_build_image(context_path, dockerfile, tag, params \\ %{}, options \\ []) do
     with {:ok, stream} <- build_image(context_path, dockerfile, tag, params, options) do
       Enum.reduce_while(stream, :ok, &consume_build_event/2)
     end
   end
 
-  defp consume_build_event(%{"error" => message}, :ok), do: {:halt, {:error, message}}
+  defp consume_build_event(%{"error" => message}, :ok) do
+    {:halt,
+     {:error,
+      ErrorMessage.unprocessable_entity(message, %{source: :build_stream, error: message})}}
+  end
 
   defp consume_build_event(%{"stream" => line}, :ok) do
     IO.write(line)
@@ -403,7 +407,9 @@ defmodule Docker.Image do
     - `{:ok, image_map}` — the image already existed locally.
     - `{:ok, stream}` — the image was not found; a build or pull stream is
       returned. Consume it to complete the operation.
-    - `{:error, reason}` — image could not be found, built, or pulled.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. A 4xx-coded error from
+      the initial lookup is treated as "not present yet" and triggers the
+      build or pull; anything else is returned as-is.
 
   ## Examples
 
@@ -411,11 +417,11 @@ defmodule Docker.Image do
       case Docker.Image.materialize_image("my-app:latest", "./my-app", %{}, []) do
         {:ok, %{"Id" => id}} -> IO.puts("Already present: " <> id)
         {:ok, stream} -> Stream.run(stream)
-        {:error, reason} -> raise inspect(reason)
+        {:error, error} -> raise ErrorMessage.to_string(error)
       end
   """
   @spec materialize_image(Docker.image_ref(), binary(), Docker.params(), Docker.options()) ::
-          {:ok, term()} | {:error, term()}
+          {:ok, term()} | {:error, ErrorMessage.t()}
   def materialize_image(image_ref, image_or_path, params, options) do
     if sandbox?(options) do
       sandbox_materialize_image_response(image_ref, image_or_path, params, options)
@@ -429,11 +435,15 @@ defmodule Docker.Image do
       {:ok, image} ->
         {:ok, image}
 
-      {:error, %{status: status}} when status in 400..499 ->
-        build_or_pull_image(image_ref, image_or_path, params, options)
-
-      {:error, reason} ->
-        {:error, reason}
+      # The image simply is not here yet — that is the case this function
+      # exists to handle. Anything else (no daemon, permissions) is a real
+      # failure and passes through.
+      {:error, %ErrorMessage{code: code} = error} ->
+        if ErrorMessage.http_code(code) in 400..499 do
+          build_or_pull_image(image_ref, image_or_path, params, options)
+        else
+          {:error, error}
+        end
     end
   end
 
@@ -479,8 +489,16 @@ defmodule Docker.Image do
 
       nil ->
         case split_image_ref_tag(image_ref) do
-          {_name, nil} -> {:error, :missing_tag}
-          {_name, _tag} -> {:ok, image_ref}
+          {_name, nil} ->
+            {:error,
+             ErrorMessage.bad_request(
+               "Cannot build an untagged image reference — pass a `:tag` param " <>
+                 "or use a \"name:tag\" reference",
+               %{image_ref: image_ref}
+             )}
+
+          {_name, _tag} ->
+            {:ok, image_ref}
         end
     end
   end
@@ -495,10 +513,19 @@ defmodule Docker.Image do
     expanded = expand_dockerfile(dockerfile, context_path)
     dockerfile_rel = relative_dockerfile(expanded, context_path)
 
-    if String.starts_with?(dockerfile_rel, "..") do
-      raise "Dockerfile outside of context, got: #{dockerfile}, context: #{context_path}"
+    # The daemon only ever sees the context archive, so a Dockerfile outside
+    # it could never be read — reject it here rather than let the build fail
+    # with an opaque daemon error. A path that escapes upwards ("../x") and
+    # one `Path.relative_to/2` could not rebase at all (an absolute path on
+    # another branch of the tree) are both outside.
+    if String.starts_with?(dockerfile_rel, "..") or Path.type(dockerfile_rel) === :absolute do
+      {:error,
+       ErrorMessage.bad_request(
+         "Dockerfile is outside of the build context",
+         %{dockerfile: dockerfile, context_path: context_path}
+       )}
     else
-      dockerfile_rel
+      {:ok, dockerfile_rel}
     end
   end
 
@@ -544,11 +571,22 @@ defmodule Docker.Image do
         end
 
       case System.cmd("tar", args) do
-        {output, 0} -> {:ok, output}
-        {error, code} -> {:error, %{status: code, error: error}}
+        {output, 0} ->
+          {:ok, output}
+
+        {output, code} ->
+          {:error,
+           ErrorMessage.internal_server_error(
+             "Could not archive the build context: tar exited with #{code}",
+             %{exit_code: code, output: output, context_path: context_path}
+           )}
       end
     else
-      {:error, :invalid_context_path}
+      {:error,
+       ErrorMessage.bad_request(
+         "The build context path is not a directory",
+         %{context_path: context_path}
+       )}
     end
   end
 
@@ -570,10 +608,9 @@ defmodule Docker.Image do
   ## Returns
 
     - `{:ok, _}` — image removed.
-    - `{:error, %{status: 404, body: _}}` — image not found.
-    - `{:error, %{status: 409, body: _}}` — image is in use by a
-      container and `force` was not set.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such image exists; `:conflict` when it is in use by a container and
+      `force` was not set.
 
   ## Examples
 
@@ -596,9 +633,8 @@ defmodule Docker.Image do
     url = Util.append_query_string("/images/#{image_ref}", params)
 
     case Client.request(:delete, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 

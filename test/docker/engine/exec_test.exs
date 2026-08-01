@@ -33,10 +33,10 @@ defmodule Docker.Engine.ExecTest do
 
     test "propagates registered errors" do
       Sandbox.set_exec_run_responses([
-        {~r/.*/, fn _ref, _cmd -> {:error, :enoent} end}
+        {~r/.*/, fn _ref, _cmd -> {:error, ErrorMessage.not_found("no such container")} end}
       ])
 
-      assert {:error, :enoent} = Exec.exec_run("c1", "true", @sandbox)
+      assert {:error, %ErrorMessage{code: :not_found}} = Exec.exec_run("c1", "true", @sandbox)
     end
   end
 

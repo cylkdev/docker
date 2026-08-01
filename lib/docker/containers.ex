@@ -61,8 +61,8 @@ defmodule Docker.Containers do
   ## Returns
 
     - `{:ok, output}` — a binary with the combined log output, untrimmed.
-    - `{:error, %{status: 404, body: _}}` — container not found.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such container exists.
 
   ## Examples
 
@@ -102,14 +102,8 @@ defmodule Docker.Containers do
     req_options = Keyword.put_new(options, :into, :raw)
 
     case Client.request(:get, url, nil, req_options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 ->
-        {:ok, Frame.demux_all(body)}
-
-      {:ok, %{status: code, body: body}} ->
-        {:error, %{status: code, body: body}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{body: body}} -> {:ok, Frame.demux_all(body)}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -137,7 +131,7 @@ defmodule Docker.Containers do
 
     - `{:ok, [map]}` — list of container maps with string keys including
       `"Id"`, `"Names"`, `"Image"`, `"State"`, and `"Labels"`.
-    - `{:error, reason}` — daemon not reachable or returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`.
 
   ## Examples
 
@@ -181,9 +175,8 @@ defmodule Docker.Containers do
     url = Util.append_query_string("/containers/json", params)
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -207,8 +200,8 @@ defmodule Docker.Containers do
       - `"State"` — map with `"Running"` (boolean), `"ExitCode"`, etc.
       - `"Labels"` — map of label key-value pairs.
       - `"Image"` — image name the container was created from.
-    - `{:error, %{status: 404, body: _}}` — no container matched.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      container matched.
 
   ## Examples
 
@@ -235,9 +228,8 @@ defmodule Docker.Containers do
     url = "/containers/#{container_ref}/json"
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -258,10 +250,9 @@ defmodule Docker.Containers do
   ## Returns
 
     - `{:ok, _}` — container removed.
-    - `{:error, %{status: 404, body: _}}` — container not found.
-    - `{:error, %{status: 409, body: _}}` — container is running and
-      `force` was not set.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such container exists; `:conflict` when it is running and `force`
+      was not set.
 
   ## Examples
 
@@ -286,9 +277,8 @@ defmodule Docker.Containers do
     url = Util.append_query_string("/containers/#{container_ref}", params)
 
     case Client.request(:delete, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -348,11 +338,11 @@ defmodule Docker.Containers do
     - `{:ok, container_id}` — the 64-character hex ID of the new container.
       Note: you can use the `name` string instead of this ID in all other
       functions.
-    - `{:error, {warnings, container_id}}` — the container was created
-      (with the returned ID) but the daemon reported warnings. Inspect
-      `warnings` (a list of strings) to see what was wrong.
-    - `{:error, reason}` — image not found, name already in use, or daemon
-      returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:unprocessable_entity`
+      when the container was created but the daemon reported warnings —
+      `details.warnings` lists them and `details.container_id` is the ID,
+      so the container can still be inspected or removed. `:not_found`
+      when the image does not exist, `:conflict` when the name is taken.
 
   ## Examples
 
@@ -392,7 +382,7 @@ defmodule Docker.Containers do
         Docker.Containers.list_containers(%{filters: [label: %{"tier" => "worker"}]})
   """
   @spec create_container(binary(), binary(), binary(), Docker.labels(), Docker.options()) ::
-          Docker.result(Docker.docker_id()) | {:error, {list(), Docker.docker_id()}}
+          Docker.result(Docker.docker_id())
   def create_container(group, name, image, labels, options \\ []) do
     if sandbox?(options) do
       sandbox_create_container_response(group, name, image, labels, options)
@@ -409,23 +399,30 @@ defmodule Docker.Containers do
     config = group |> Instance.new(name, image, labels, options) |> Instance.to_map()
 
     case Client.request(:post, url, {:json, config}, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 ->
-        interpret_create_response(body)
-
-      {:ok, %{status: code, body: body}} ->
-        {:error, %{status: code, body: body}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{body: body}} -> interpret_create_response(body, name)
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
-  defp interpret_create_response(%{"Id" => id, "Warnings" => []}), do: {:ok, id}
+  defp interpret_create_response(%{"Id" => id, "Warnings" => []}, _name), do: {:ok, id}
 
-  defp interpret_create_response(%{"Id" => id, "Warnings" => warnings}),
-    do: {:error, {warnings, id}}
+  # The daemon created the container but flagged something about the config it
+  # was given, so the ID is reported alongside the warnings rather than lost.
+  defp interpret_create_response(%{"Id" => id, "Warnings" => warnings}, name) do
+    {:error,
+     ErrorMessage.unprocessable_entity(
+       "The Docker daemon created the container with warnings: #{Enum.join(warnings, "; ")}",
+       %{warnings: warnings, container_id: id, name: name}
+     )}
+  end
 
-  defp interpret_create_response(body), do: {:error, body}
+  defp interpret_create_response(body, name) do
+    {:error,
+     ErrorMessage.internal_server_error(
+       "The Docker daemon returned an unrecognised create response",
+       %{body: body, name: name}
+     )}
+  end
 
   @doc """
   Starts a previously created container.
@@ -441,9 +438,8 @@ defmodule Docker.Containers do
   ## Returns
 
     - `{:ok, _}` — container is now starting.
-    - `{:error, %{status: 304, body: _}}` — container is already running.
-    - `{:error, %{status: 404, body: _}}` — container not found.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_modified` when the
+      container is already running, `:not_found` when it does not exist.
 
   ## Examples
 
@@ -463,9 +459,8 @@ defmodule Docker.Containers do
     url = "/containers/#{container_ref}/start"
 
     case Client.request(:post, url, {:json, %{}}, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -485,9 +480,8 @@ defmodule Docker.Containers do
   ## Returns
 
     - `{:ok, _}` — container is stopped.
-    - `{:error, %{status: 304, body: _}}` — container is already stopped.
-    - `{:error, %{status: 404, body: _}}` — container not found.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_modified` when the
+      container is already stopped, `:not_found` when it does not exist.
 
   ## Examples
 
@@ -507,9 +501,8 @@ defmodule Docker.Containers do
     url = "/containers/#{container_ref}/stop"
 
     case Client.request(:post, url, {:json, %{}}, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -536,10 +529,10 @@ defmodule Docker.Containers do
   ## Returns
 
     - `{:ok, _}` — archive extracted successfully.
-    - `{:error, %{status: 400, body: _}}` — bad request (e.g. path not
-      absolute, malformed archive).
-    - `{:error, %{status: 404, body: _}}` — container not found.
-    - `{:error, reason}` — daemon not reachable or returned another error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:bad_request` when
+      `tar_path` could not be read, or the daemon rejected the request
+      (path not absolute, malformed archive); `:not_found` when the
+      container does not exist.
 
   ## Examples
 
@@ -580,13 +573,23 @@ defmodule Docker.Containers do
 
     url = Util.append_query_string("/containers/#{container_ref}/archive", query)
 
-    with {:ok, tar} <- File.read(tar_path),
-         {:ok, %{status: code, body: body}} when code in 200..299 <-
-           Client.request(:put, url, {:tar, tar}, options) do
+    with {:ok, tar} <- read_tar(tar_path),
+         {:ok, %{body: body}} <- Client.request(:put, url, {:tar, tar}, options) do
       {:ok, body}
-    else
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp read_tar(tar_path) do
+    case File.read(tar_path) do
+      {:ok, tar} ->
+        {:ok, tar}
+
+      {:error, reason} ->
+        {:error,
+         ErrorMessage.bad_request(
+           "Could not read the tar archive at #{tar_path}: #{:file.format_error(reason)}",
+           %{tar_path: tar_path, reason: reason}
+         )}
     end
   end
 
@@ -639,7 +642,7 @@ defmodule Docker.Containers do
     else
       case find_container(container_ref, options) do
         {:ok, container} -> container_running?(container)
-        {:error, %{status: 404}} -> false
+        {:error, %ErrorMessage{code: :not_found}} -> false
       end
     end
   end

@@ -49,11 +49,28 @@ if Code.ensure_loaded?(SandboxRegistry) do
         or the literal `"*"` for actions with no natural id (e.g. `:ping`,
         `:list_*`).
 
+    ## Error responses
+
+    Registered responses are surfaced verbatim, errors included — nothing is
+    coerced. Register `{:error, %ErrorMessage{}}` so the code under test sees
+    the same shape it would get in production:
+
+        Docker.Sandbox.set_find_container_responses([
+          {~r/.*/, fn _ref -> {:error, ErrorMessage.not_found("No such container")} end}
+        ])
+
+        assert {:error, %ErrorMessage{code: :not_found}} =
+                 Docker.find_container("ghost", sandbox: [enabled: true])
+
+    Registering a bare atom or map instead will not fail here — it will fail
+    in whatever code consumes it, which is the point.
+
     ## What sandbox mode does NOT do
 
       * It does not validate inputs — your registered function gets the args
         verbatim. If your code has a bug that passes the wrong shape, the
         sandbox will not catch it.
+      * It does not validate the shape of what you return, including errors.
       * It does not simulate transport errors unless your function returns
         one. Test transport-error handling against `Req` (for unary calls
         and NDJSON streams) or `OneOhOne` (for streaming sessions) with a

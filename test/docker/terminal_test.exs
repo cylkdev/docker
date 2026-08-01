@@ -18,9 +18,13 @@ defmodule Docker.TerminalTest do
   end
 
   describe "unregistered names (no Docker required)" do
-    test "command/3 returns :not_found when no session is open" do
+    test "command/3 returns a :not_found error when no session is open" do
       name = "unregistered-#{System.unique_integer([:positive])}"
-      assert {:error, {:not_found, ^name}} = Terminal.command(name, "echo hi")
+
+      assert {:error, %ErrorMessage{code: :not_found, details: details}} =
+               Terminal.command(name, "echo hi")
+
+      assert %{container_ref: ^name} = details
     end
 
     test "close/1 of an unregistered name is :ok" do
@@ -28,9 +32,11 @@ defmodule Docker.TerminalTest do
       assert :ok = Terminal.close(name)
     end
 
-    test "whereis/1 of an unregistered name is :error" do
+    test "whereis/1 of an unregistered name is a :not_found error" do
       name = "unregistered-#{System.unique_integer([:positive])}"
-      assert :error = Terminal.whereis(name)
+
+      assert {:error, %ErrorMessage{code: :not_found, details: %{container_ref: ^name}}} =
+               Terminal.whereis(name)
     end
   end
 
@@ -57,10 +63,10 @@ defmodule Docker.TerminalTest do
 
       assert :ok = Terminal.close(container_name)
       assert_receive {:DOWN, ^monitor_ref, :process, ^pid, _}, 1_000
-      assert :error = Terminal.whereis(container_name)
+      assert {:error, %ErrorMessage{code: :not_found}} = Terminal.whereis(container_name)
     end
 
-    test "open/2 twice for the same name returns {:error, {:already_started, _}}",
+    test "open/2 twice for the same name returns a :conflict error",
          %{image_tag: image_tag} do
       container_name = "term-dup-#{System.unique_integer([:positive])}"
 
@@ -70,9 +76,10 @@ defmodule Docker.TerminalTest do
 
       assert :ok = Terminal.open(container_name, shell: ["/repl.sh"])
 
-      assert {:error, {:already_started, pid}} =
+      assert {:error, %ErrorMessage{code: :conflict, details: details}} =
                Terminal.open(container_name, shell: ["/repl.sh"])
 
+      assert %{container_ref: ^container_name, pid: pid} = details
       assert is_pid(pid)
 
       assert :ok = Terminal.close(container_name)

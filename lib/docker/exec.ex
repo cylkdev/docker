@@ -51,8 +51,8 @@ defmodule Docker.Exec do
 
     - `{:ok, exec_id}` — a string ID for the new exec instance. Pass it
       to `exec_start/2`.
-    - `{:error, reason}` — container not found, not running, or daemon
-      returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such container exists, `:conflict` when it is not running.
 
   ## Examples
 
@@ -85,14 +85,19 @@ defmodule Docker.Exec do
       |> put_exec_option_if_present("WorkingDir", Keyword.get(options, :workdir))
 
     case Client.request(:post, url, {:json, payload}, options) do
-      {:ok, %{status: code, body: %{"Id" => exec_id}}} when code in 200..299 ->
+      {:ok, %{body: %{"Id" => exec_id}}} ->
         {:ok, exec_id}
 
-      {:ok, %{status: code, body: body}} ->
-        {:error, %{status: code, body: body}}
+      # A 2xx that carries no exec ID leaves nothing to start.
+      {:ok, %{body: body}} ->
+        {:error,
+         ErrorMessage.internal_server_error(
+           "The Docker daemon created an exec instance but returned no ID",
+           %{body: body, container_ref: container_ref}
+         )}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, %ErrorMessage{} = error} ->
+        {:error, error}
     end
   end
 
@@ -113,8 +118,8 @@ defmodule Docker.Exec do
 
     - `{:ok, output}` — combined stdout and stderr as a binary, untrimmed.
       Trailing newlines and ANSI escape sequences are preserved.
-    - `{:error, reason}` — exec instance not found or daemon returned an
-      error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such exec instance exists.
 
   ## Examples
 
@@ -142,14 +147,8 @@ defmodule Docker.Exec do
     }
 
     case Client.request(:post, url, {:json, payload}, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 ->
-        {:ok, body}
-
-      {:ok, %{status: code, body: body}} ->
-        {:error, %{status: code, body: body}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -170,8 +169,8 @@ defmodule Docker.Exec do
     - `{:ok, map}` — a map with atom keys:
       - `:exit_code` — integer exit code, or `nil` if not yet exited.
       - `:running` — `true` if the exec process is still running.
-    - `{:error, reason}` — exec instance not found or daemon returned an
-      error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such exec instance exists.
 
   ## Examples
 
@@ -192,14 +191,8 @@ defmodule Docker.Exec do
     url = "/exec/#{exec_id}/json"
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 ->
-        {:ok, Serializer.deserialize(body, options)}
-
-      {:ok, %{status: code, body: body}} ->
-        {:error, %{status: code, body: body}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{body: body}} -> {:ok, Serializer.deserialize(body, options)}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 
@@ -225,8 +218,8 @@ defmodule Docker.Exec do
   ## Returns
 
     - `{:ok, output}` — combined stdout and stderr, untrimmed.
-    - `{:error, reason}` — container not found, not running, exec failed,
-      or daemon returned an error.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such container exists, `:conflict` when it is not running.
 
   ## Examples
 
@@ -279,7 +272,8 @@ defmodule Docker.Exec do
       - `:exit_code` — integer exit code (`0` = success), or `nil` if
         the daemon did not yet report one.
       - `:running` — `true` if the exec is still running at inspect time.
-    - `{:error, reason}` — create, start, or inspect failed.
+    - `{:error, error}` — an `t:ErrorMessage.t/0` from whichever of
+      create, start, or inspect failed first.
 
   ## Examples
 
@@ -327,13 +321,12 @@ defmodule Docker.Exec do
   must have been created with `Tty: true` and be running.
   """
   @spec resize(Docker.exec_id(), pos_integer(), pos_integer(), Docker.options()) ::
-          :ok | {:error, term()}
+          :ok | {:error, ErrorMessage.t()}
   def resize(exec_id, rows, cols, options \\ [])
       when is_binary(exec_id) and is_integer(rows) and is_integer(cols) do
     case Client.request(:post, resize_path(exec_id, rows, cols), nil, options) do
-      {:ok, %{status: code}} when code in 200..299 -> :ok
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, _response} -> :ok
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 

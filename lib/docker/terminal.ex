@@ -74,12 +74,16 @@ defmodule Docker.Terminal do
       All other keys are forwarded to `Docker.Session.exec_session/3`
       (e.g. `:env`, `:user`, `:workdir`, `:sandbox`).
 
-  Returns `{:error, {:already_started, pid}}` if a session under
-  `container_ref` is already open, or `{:error, reason}` if the
-  underlying exec instance could not be created or started.
+  ## Returns
+
+    - `:ok` — the session is open and registered.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:conflict` when a
+      session under `container_ref` is already open (`details.pid` is the
+      existing one); otherwise whatever error the underlying exec instance
+      failed with.
   """
   @doc since: "0.1.0"
-  @spec open(Docker.container_ref(), keyword()) :: :ok | {:error, term()}
+  @spec open(Docker.container_ref(), keyword()) :: :ok | {:error, ErrorMessage.t()}
   def open(container_ref, opts \\ []) when is_binary(container_ref) and is_list(opts) do
     spec = %{
       id: {__MODULE__, container_ref},
@@ -88,10 +92,33 @@ defmodule Docker.Terminal do
     }
 
     case DynamicSupervisor.start_child(Docker.Terminal.Supervisor, spec) do
-      {:ok, _pid} -> :ok
-      {:error, {:shutdown, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, pid}} ->
+        {:error,
+         ErrorMessage.conflict(
+           "A terminal session is already open for #{container_ref}",
+           %{container_ref: container_ref, pid: pid}
+         )}
+
+      # `init/1` stops with the ErrorMessage that `exec_session/3` failed
+      # with, so the original code and details survive the supervisor.
+      {:error, {:shutdown, reason}} ->
+        {:error, start_error(reason, container_ref)}
+
+      {:error, reason} ->
+        {:error, start_error(reason, container_ref)}
     end
+  end
+
+  defp start_error(%ErrorMessage{} = error, _container_ref), do: error
+
+  defp start_error(reason, container_ref) do
+    ErrorMessage.internal_server_error(
+      "Could not open a terminal session for #{container_ref}: #{inspect(reason)}",
+      %{container_ref: container_ref, reason: reason}
+    )
   end
 
   @doc """
@@ -112,21 +139,24 @@ defmodule Docker.Terminal do
       `Docker.Streaming.Session.recv/3`. Defaults to `[]`.
     * `:newline` - binary appended after `line`. Defaults to `"\\n"`.
 
-  Returns `{:ok, {output, container_ref}}` (or
-  `{:ok, {{stdout, stderr}, container_ref}}` when `:split` is set in
-  `:recv_opts`), `{:error, {reason, container_ref}}` on failure, or
-  `{:error, {:not_found, container_ref}}` when no session is open under
-  that name.
+  ## Returns
+
+    - `{:ok, {output, container_ref}}`, or
+      `{:ok, {{stdout, stderr}, container_ref}}` when `:split` is set in
+      `:recv_opts`.
+    - `{:error, error}` — an `t:ErrorMessage.t/0` carrying
+      `details.container_ref`. `:not_found` when no session is open under
+      that name, `:request_timeout` when the shell sent nothing back,
+      `:gone` when the session has closed.
   """
   @doc since: "0.1.0"
   @spec command(binary(), iodata(), keyword()) ::
           {:ok, {binary(), binary()}}
           | {:ok, {{binary(), binary()}, binary()}}
-          | {:error, {term(), binary()}}
+          | {:error, ErrorMessage.t()}
   def command(container_ref, line, opts \\ []) when is_binary(container_ref) do
-    case whereis(container_ref) do
-      {:ok, pid} -> GenServer.call(pid, {:command, line, opts}, :infinity)
-      :error -> {:error, {:not_found, container_ref}}
+    with {:ok, pid} <- whereis(container_ref) do
+      GenServer.call(pid, {:command, line, opts}, :infinity)
     end
   end
 
@@ -150,21 +180,28 @@ defmodule Docker.Terminal do
           {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
         end
 
-      :error ->
+      {:error, _not_open} ->
         :ok
     end
   end
 
   @doc """
-  Returns `{:ok, pid}` for the session open under `container_ref`, or
-  `:error` if no session is currently open under that name.
+  Returns `{:ok, pid}` for the session open under `container_ref`, or a
+  `:not_found` error if no session is currently open under that name.
   """
   @doc since: "0.1.0"
-  @spec whereis(binary()) :: {:ok, pid()} | :error
+  @spec whereis(binary()) :: {:ok, pid()} | {:error, ErrorMessage.t()}
   def whereis(container_ref) when is_binary(container_ref) do
     case Registry.lookup(Docker.Terminal.Registry, container_ref) do
-      [{pid, _value}] -> {:ok, pid}
-      [] -> :error
+      [{pid, _value}] ->
+        {:ok, pid}
+
+      [] ->
+        {:error,
+         ErrorMessage.not_found(
+           "No terminal session is open for #{container_ref}",
+           %{container_ref: container_ref}
+         )}
     end
   end
 
@@ -212,11 +249,13 @@ defmodule Docker.Terminal do
          {:ok, output, session} <- Session.recv(server.session, recv_mode, recv_opts) do
       {:reply, {:ok, {output, server.name}}, %{server | session: session}}
     else
-      {:error, reason} ->
-        {:reply, {:error, {reason, server.name}}, server}
+      # `Session.recv/3` hands the session back through the error's details;
+      # keeping it means a timed-out read does not discard buffered output.
+      {:error, %ErrorMessage{details: %{session: %Session{} = session}} = error} ->
+        {:reply, {:error, name_error(error, server.name)}, %{server | session: session}}
 
-      {:error, reason, session} ->
-        {:reply, {:error, {reason, server.name}}, %{server | session: session}}
+      {:error, %ErrorMessage{} = error} ->
+        {:reply, {:error, name_error(error, server.name)}, server}
     end
   end
 
@@ -255,6 +294,18 @@ defmodule Docker.Terminal do
   @spec via(binary()) :: {:via, Registry, {module(), binary()}}
   defp via(container_ref),
     do: {:via, Registry, {Docker.Terminal.Registry, container_ref}}
+
+  # The session struct is an implementation detail of this process; callers
+  # get the container ref instead.
+  defp name_error(%ErrorMessage{details: details} = error, name) do
+    details =
+      details
+      |> Kernel.||(%{})
+      |> Map.delete(:session)
+      |> Map.put(:container_ref, name)
+
+    %{error | details: details}
+  end
 
   @spec monitor_transport(Session.t()) :: reference()
   defp monitor_transport(%Session{socket: pid}) when is_pid(pid), do: Process.monitor(pid)

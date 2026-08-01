@@ -52,6 +52,7 @@ defmodule Docker.MixProject do
       {:sandbox_registry, "~> 0.1", only: [:dev, :test]},
       # ---
       {:req, "~> 0.5"},
+      {:error_message, "~> 0.3"},
       {:oneoone, github: "cylkdev/oneoone", branch: "main"},
       {:nimble_options, "~> 1.1"},
       {:recase, "~> 0.9"}

@@ -64,7 +64,7 @@ defmodule Docker.Streaming.Session do
   @type recv_result ::
           {:ok, binary(), t()}
           | {:ok, {binary(), binary()}, t()}
-          | {:error, term(), t()}
+          | {:error, ErrorMessage.t()}
 
   defstruct socket: nil,
             tty: false,
@@ -90,17 +90,40 @@ defmodule Docker.Streaming.Session do
   @doc """
   Returns `:ok` after sending bytes to the inner process's stdin.
   """
-  @spec send(t(), iodata()) :: :ok | {:error, term()}
-  def send(%__MODULE__{closed: true}, _data), do: {:error, :closed}
-  def send(%__MODULE__{socket: socket}, data), do: transport_send(socket, data)
+  @spec send(t(), iodata()) :: :ok | {:error, ErrorMessage.t()}
+  def send(%__MODULE__{closed: true} = session, _data) do
+    {:error, closed_error("Cannot write to a closed session", session)}
+  end
+
+  def send(%__MODULE__{socket: socket} = session, data) do
+    case transport_send(socket, data) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         ErrorMessage.bad_gateway(
+           "Could not write to the session transport: #{inspect(reason)}",
+           %{reason: reason, session: session}
+         )}
+    end
+  end
 
   @doc """
   Returns bytes from the session under a termination condition.
+
+  On failure the session is carried in the error's `:details` under
+  `:session`, so a caller holding buffered output does not lose it:
+
+      {:error, %ErrorMessage{details: %{session: session}}} ->
+        # `session` is still usable; its buffers are intact.
   """
   @spec recv(t(), recv_mode(), recv_opts()) :: recv_result()
   def recv(session, mode, opts \\ [])
 
-  def recv(%__MODULE__{closed: true} = s, _mode, _opts), do: {:error, :closed, s}
+  def recv(%__MODULE__{closed: true} = session, _mode, _opts) do
+    {:error, closed_error("Cannot read from a closed session", session)}
+  end
 
   def recv(%__MODULE__{} = session, {:idle_timeout, ms}, opts)
       when is_integer(ms) and ms >= 0 do
@@ -135,6 +158,9 @@ defmodule Docker.Streaming.Session do
 
   defp transport_send(socket, data) when is_pid(socket), do: OneOhOne.push(socket, data)
 
+  # Keeps bare atoms rather than ErrorMessage structs: these two outcomes are
+  # control flow for `loop_idle/3` and `recv_and_continue/4`, which decide
+  # between them, and neither escapes this module.
   defp transport_recv(socket, ms) when is_pid(socket) do
     receive do
       {:docker_stream, ^socket, :data, chunk} -> {:ok, chunk}
@@ -181,7 +207,7 @@ defmodule Docker.Streaming.Session do
         remaining = deadline - :erlang.monotonic_time(:millisecond)
 
         if remaining <= 0 do
-          {:error, :timeout, session}
+          {:error, timeout_error(session, delim)}
         else
           recv_and_continue(session, delim, deadline, remaining)
         end
@@ -196,11 +222,26 @@ defmodule Docker.Streaming.Session do
         |> loop_until(delim, deadline)
 
       {:error, :timeout} ->
-        {:error, :timeout, session}
+        {:error, timeout_error(session, delim)}
 
       {:error, :closed} ->
-        {:error, :closed_before_delimiter, %{session | closed: true}}
+        {:error,
+         ErrorMessage.gone(
+           "The session closed before the delimiter arrived",
+           %{session: %{session | closed: true}, delimiter: delim}
+         )}
     end
+  end
+
+  defp timeout_error(session, delim) do
+    ErrorMessage.request_timeout(
+      "Timed out waiting for the delimiter #{inspect(delim)}",
+      %{session: session, delimiter: delim}
+    )
+  end
+
+  defp closed_error(message, session) do
+    ErrorMessage.gone(message, %{session: session})
   end
 
   defp finalize(session, opts) do

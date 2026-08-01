@@ -30,9 +30,9 @@ defmodule Docker.Info do
   ## Returns
 
     - `{:ok, "OK"}` — the daemon is reachable and answered.
-    - `{:error, reason}` — the daemon could not be reached or returned an
-      error. `reason` is typically an exception struct, an atom like
-      `:timeout`, or a map `%{status: code, body: body}`.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. A daemon that is not
+      running gives `:service_unavailable`; a socket the current user may
+      not open gives `:forbidden`.
 
   ## Examples
 
@@ -49,9 +49,8 @@ defmodule Docker.Info do
 
   defp do_ping(options) do
     case Client.request(:get, "/_ping", nil, options) do
-      {:ok, %{status: code, body: body}} when code in 200..299 -> {:ok, body}
-      {:ok, %{status: code, body: body}} -> {:error, %{status: code, body: body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
 

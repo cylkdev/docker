@@ -37,6 +37,9 @@ defmodule Docker.Client do
   #      module prepended it OR the caller already supplied it.
   #   2. Frame post-processing runs only on 2xx responses; non-2xx bodies
   #      pass through unchanged.
+  #   3. Every {:error, _} leaving this module carries an ErrorMessage. This
+  #      is the only place in the library that maps an HTTP status to an
+  #      error code, so callers pass failures through untouched.
 
   alias Docker.Config
   alias Docker.Frame
@@ -62,11 +65,13 @@ defmodule Docker.Client do
   ## Returns
 
     * `{:ok, response}` — Status was 200..299.
-    * `{:error, response}` — Status was outside 200..299.
-    * `{:error, reason}` — Transport failed.
+    * `{:error, error}` — Status was outside 200..299, or the transport
+      failed. `error` is an `t:ErrorMessage.t/0` whose `:code` is derived
+      from the status (404 becomes `:not_found`) and whose `:details`
+      carry `:status`, `:body`, `:method`, and `:path`.
   """
   @spec request(method(), String.t(), body(), keyword()) ::
-          {:ok, response()} | {:error, response() | term()}
+          {:ok, response()} | {:error, ErrorMessage.t()}
   def request(method, path, body \\ nil, options \\ []) do
     do_request(method, path, body, options)
   end
@@ -86,11 +91,15 @@ defmodule Docker.Client do
   ## Returns
 
     * `{:ok, stream}` — Status was 200..299. Consume with `Enum.*` / `Stream.*`.
-    * `{:error, response}` — Non-2xx status; body fully read.
-    * `{:error, reason}` — Transport failed.
+    * `{:error, error}` — Non-2xx status (body fully read into `:details`),
+      or the transport failed. `error` is an `t:ErrorMessage.t/0`.
+
+  A failure that happens *after* this function has returned `{:ok, stream}` —
+  a truncated or stalled body — has no return value left to travel through
+  and is raised as a `Docker.StreamError` from inside the enumerable.
   """
   @spec stream(method(), String.t(), body(), keyword()) ::
-          {:ok, Enumerable.t()} | {:error, response() | term()}
+          {:ok, Enumerable.t()} | {:error, ErrorMessage.t()}
   def stream(method, path, body \\ nil, options \\ []) do
     do_stream(method, path, body, options)
   end
@@ -115,11 +124,11 @@ defmodule Docker.Client do
         if status in 200..299 do
           {:ok, response}
         else
-          {:error, response}
+          {:error, response_error(response, method, full_path)}
         end
 
       {:error, %{__exception__: true} = exception} ->
-        {:error, Exception.message(exception)}
+        {:error, transport_error(exception, method, full_path)}
     end
   end
 
@@ -148,19 +157,21 @@ defmodule Docker.Client do
         body = drain_async_body(resp)
         Req.cancel_async_response(resp)
 
-        {:error,
-         %{
-           status: status,
-           body: body,
-           headers: normalize_headers(resp.headers)
-         }}
+        response = %{status: status, body: body, headers: normalize_headers(resp.headers)}
+
+        {:error, response_error(response, method, full_path)}
 
       {:ok, %Req.Response{status: status, body: body, headers: headers}} ->
         response = %{status: status, body: body, headers: normalize_headers(headers)}
-        if status in 200..299, do: {:ok, response}, else: {:error, response}
+
+        if status in 200..299 do
+          {:ok, response}
+        else
+          {:error, response_error(response, method, full_path)}
+        end
 
       {:error, %{__exception__: true} = exception} ->
-        {:error, Exception.message(exception)}
+        {:error, transport_error(exception, method, full_path)}
     end
   end
 
@@ -313,6 +324,109 @@ defmodule Docker.Client do
       {k, v} when is_binary(v) -> {k, v}
     end)
   end
+
+  # ---------------------------------------------------------------------------
+  # Errors
+  # ---------------------------------------------------------------------------
+
+  # Every non-2xx daemon response becomes an ErrorMessage here, so no caller
+  # further up ever has to derive a code from a status. `:path` carries the
+  # container/image/network ref the call was about, so the error says what
+  # failed and not merely that something did.
+  @spec response_error(response(), method(), String.t()) :: ErrorMessage.t()
+  defp response_error(%{status: status, body: body}, method, path) do
+    apply(ErrorMessage, status_code(status), [
+      daemon_message(body, status),
+      %{status: status, body: body, method: method, path: path}
+    ])
+  end
+
+  @spec transport_error(Exception.t(), method(), String.t()) :: ErrorMessage.t()
+  defp transport_error(exception, method, path) do
+    {code, message} = classify_transport(exception)
+
+    apply(ErrorMessage, code, [
+      message,
+      %{reason: exception, method: method, path: path, socket_path: Config.socket_path()}
+    ])
+  end
+
+  # Req wraps the POSIX reason; the reason is what distinguishes "Docker isn't
+  # running" from "the daemon hung up mid-request", and both are worth telling
+  # apart at the call site.
+  defp classify_transport(%{reason: reason}) when reason in [:timeout, :etimedout] do
+    {:gateway_timeout, "Timed out waiting for the Docker daemon"}
+  end
+
+  defp classify_transport(%{reason: reason}) when reason in [:eacces, :eperm] do
+    {:forbidden,
+     "Permission denied opening the Docker socket at #{Config.socket_path()}. " <>
+       "Check that the current user may access it."}
+  end
+
+  defp classify_transport(%{reason: reason}) when reason in [:econnrefused, :enoent] do
+    {:service_unavailable,
+     "Could not reach the Docker daemon at #{Config.socket_path()}. " <>
+       "Check that Docker is running."}
+  end
+
+  defp classify_transport(%{reason: reason}) when reason in [:closed, :econnreset, :epipe] do
+    {:bad_gateway, "The connection to the Docker daemon closed unexpectedly"}
+  end
+
+  # Everything above carries a POSIX reason, so it really was the connection.
+  # What is left is an exception raised while processing a response the daemon
+  # did send — a body that would not decode, most often — which is a bad
+  # upstream reply rather than an unreachable daemon.
+  defp classify_transport(exception) do
+    {:bad_gateway,
+     "The Docker daemon returned a response this client could not read: " <>
+       Exception.message(exception)}
+  end
+
+  # `ErrorMessage.http_code_reason_atom/1` delegates to `Plug.Conn.Status`,
+  # which raises for codes outside its table and answers 2xx codes with names
+  # ErrorMessage has no constructor for. Neither may escape the error path.
+  @spec status_code(integer()) :: ErrorMessage.code()
+  defp status_code(status) do
+    atom = ErrorMessage.http_code_reason_atom(status)
+
+    if function_exported?(ErrorMessage, atom, 2), do: atom, else: fallback_code(status)
+  rescue
+    ArgumentError -> fallback_code(status)
+  end
+
+  defp fallback_code(status) when status in 300..499, do: :bad_request
+  defp fallback_code(_status), do: :internal_server_error
+
+  # The Engine API puts its human-readable text at `body["message"]`.
+  defp daemon_message(%{"message" => message}, status) when is_binary(message) do
+    presence(message) || generic_message(status)
+  end
+
+  # `stream/4` drains error bodies as raw bytes rather than decoding them, so
+  # the same 404 that `request/4` hands over as a map arrives here as JSON
+  # text. Both paths should produce the same message.
+  defp daemon_message(body, status) when is_binary(body) do
+    case JSON.decode(body) do
+      {:ok, %{"message" => message}} when is_binary(message) ->
+        presence(message) || generic_message(status)
+
+      _not_a_daemon_error_body ->
+        presence(body) || generic_message(status)
+    end
+  end
+
+  defp daemon_message(_body, status), do: generic_message(status)
+
+  defp presence(string) do
+    case String.trim(string) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp generic_message(status), do: "The Docker daemon responded with HTTP #{status}"
 
   # ---------------------------------------------------------------------------
   # Path / version prefix

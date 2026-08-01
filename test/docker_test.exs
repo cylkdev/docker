@@ -13,9 +13,12 @@ defmodule DockerTest do
     end
 
     test "propagates registered errors" do
-      Sandbox.set_ping_responses([fn -> {:error, :enoent} end])
+      Sandbox.set_ping_responses([
+        fn -> {:error, ErrorMessage.service_unavailable("daemon down", %{reason: :enoent})} end
+      ])
 
-      assert {:error, :enoent} = Docker.ping(@sandbox)
+      assert {:error, %ErrorMessage{code: :service_unavailable, details: %{reason: :enoent}}} =
+               Docker.ping(@sandbox)
     end
   end
 
@@ -149,12 +152,16 @@ defmodule DockerTest do
       assert {:ok, %{id: "sha256:alpine"}} = Docker.find_image("alpine", @sandbox)
     end
 
-    test "404 surfaces as error" do
+    test "404 surfaces as a :not_found error" do
       Sandbox.set_find_image_responses([
-        {~r/.*/, fn _ref -> {:error, %{status: 404, body: %{"message" => "no such image"}}} end}
+        {~r/.*/,
+         fn _ref ->
+           {:error, ErrorMessage.not_found("no such image", %{status: 404})}
+         end}
       ])
 
-      assert {:error, %{status: 404}} = Docker.find_image("ghost", @sandbox)
+      assert {:error, %ErrorMessage{code: :not_found, message: "no such image"}} =
+               Docker.find_image("ghost", @sandbox)
     end
   end
 
@@ -360,11 +367,11 @@ defmodule DockerTest do
       Sandbox.set_put_archive_responses([
         {~r/.*/,
          fn _ref, _dest, _tar ->
-           {:error, %{status: 404, body: %{"message" => "no such file"}}}
+           {:error, ErrorMessage.not_found("no such file", %{status: 404})}
          end}
       ])
 
-      assert {:error, %{status: 404}} =
+      assert {:error, %ErrorMessage{code: :not_found}} =
                Docker.put_archive("c1", "/no/such/dir", "fake-tar-bytes", @sandbox)
     end
   end
@@ -433,10 +440,12 @@ defmodule DockerTest do
 
     test "propagates registered errors" do
       Sandbox.set_pull_image_responses([
-        {~r/.*/, fn _image, _params, _opts -> {:error, %{status: 404}} end}
+        {~r/.*/,
+         fn _image, _params, _opts -> {:error, ErrorMessage.not_found("no such image")} end}
       ])
 
-      assert {:error, %{status: 404}} = Docker.pull_image("ghost", %{}, @sandbox)
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Docker.pull_image("ghost", %{}, @sandbox)
     end
   end
 
@@ -464,21 +473,38 @@ defmodule DockerTest do
       assert events === Enum.to_list(stream)
     end
 
-    test "raises when tag is empty (before sandbox dispatch)" do
-      assert_raise RuntimeError, ~r/Expected tag/, fn ->
-        Docker.build_image("examples/busybox-example", "Dockerfile", "", %{}, @sandbox)
-      end
+    test "returns a :bad_request error when tag is empty (before sandbox dispatch)" do
+      assert {:error, %ErrorMessage{code: :bad_request, details: %{tag: ""}}} =
+               Docker.build_image("examples/busybox-example", "Dockerfile", "", %{}, @sandbox)
+    end
+
+    test "returns a :bad_request error when the Dockerfile escapes the context" do
+      assert {:error, %ErrorMessage{code: :bad_request, message: message}} =
+               Docker.build_image("examples/busybox-example", "../../etc/hosts", "x:y")
+
+      assert message === "Dockerfile is outside of the build context"
+    end
+
+    test "returns a :bad_request error when the Dockerfile is an unrelated absolute path" do
+      assert {:error, %ErrorMessage{code: :bad_request, details: details}} =
+               Docker.build_image("examples/busybox-example", "/etc/hosts", "x:y")
+
+      assert %{dockerfile: "/etc/hosts", context_path: context_path} = details
+      assert String.ends_with?(context_path, "examples/busybox-example")
     end
 
     test "propagates registered errors" do
       Sandbox.set_build_image_responses([
         {~r/.*/,
          fn _ctx, _dockerfile, _tag, _params, _opts ->
-           {:error, :invalid_context_path}
+           {:error,
+            ErrorMessage.bad_request("The build context path is not a directory", %{
+              context_path: "/nope"
+            })}
          end}
       ])
 
-      assert {:error, :invalid_context_path} =
+      assert {:error, %ErrorMessage{code: :bad_request, details: %{context_path: "/nope"}}} =
                Docker.build_image("/nope", "Dockerfile", "x:y", %{}, @sandbox)
     end
   end
@@ -514,7 +540,7 @@ defmodule DockerTest do
       assert output === "Step 1/1 : FROM alpine\nSuccessfully built deadbeef\n"
     end
 
-    test "returns {:error, message} when the daemon reports a build error" do
+    test "returns an :unprocessable_entity error when the daemon reports a build error" do
       register_build_events([
         %{"stream" => "Step 1/2 : FROM alpine\n"},
         %{
@@ -524,7 +550,11 @@ defmodule DockerTest do
       ])
 
       capture_io(fn ->
-        assert {:error, "The command '/bin/sh -c exit 1' returned a non-zero code: 1"} =
+        assert {:error,
+                %ErrorMessage{
+                  code: :unprocessable_entity,
+                  message: "The command '/bin/sh -c exit 1' returned a non-zero code: 1"
+                }} =
                  Docker.run_build_image(
                    "examples/busybox-example",
                    "Dockerfile",
@@ -537,10 +567,13 @@ defmodule DockerTest do
 
     test "propagates a build_image/5 error without consuming a stream" do
       Sandbox.set_build_image_responses([
-        {~r/.*/, fn _ctx, _dockerfile, _tag, _params, _opts -> {:error, :nope} end}
+        {~r/.*/,
+         fn _ctx, _dockerfile, _tag, _params, _opts ->
+           {:error, ErrorMessage.bad_request("nope")}
+         end}
       ])
 
-      assert {:error, :nope} =
+      assert {:error, %ErrorMessage{code: :bad_request, message: "nope"}} =
                Docker.run_build_image("/nope", "Dockerfile", "x:y", %{}, @sandbox)
     end
   end

@@ -126,21 +126,27 @@ defmodule Docker.SandboxTest do
 
   describe "error responses" do
     test "ping_response surfaces a registered {:error, _} verbatim" do
-      Sandbox.set_ping_responses([fn -> {:error, :econnrefused} end])
-      assert {:error, :econnrefused} = Sandbox.ping_response([])
+      error = ErrorMessage.service_unavailable("daemon down", %{reason: :econnrefused})
+      Sandbox.set_ping_responses([fn -> {:error, error} end])
+      assert {:error, ^error} = Sandbox.ping_response([])
     end
 
     test "find_image_response surfaces a registered {:error, :not_found}" do
       Sandbox.set_find_image_responses([
-        {"missing", fn _ref -> {:error, :not_found} end}
+        {"missing", fn _ref -> {:error, ErrorMessage.not_found("no such image")} end}
       ])
 
-      assert {:error, :not_found} = Sandbox.find_image_response("missing", [])
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Sandbox.find_image_response("missing", [])
     end
 
-    test "list_networks_response surfaces a registered {:error, :timeout}" do
-      Sandbox.set_list_networks_responses([fn -> {:error, :timeout} end])
-      assert {:error, :timeout} = Sandbox.list_networks_response(%{}, [])
+    test "list_networks_response surfaces a registered {:error, _} verbatim" do
+      Sandbox.set_list_networks_responses([
+        fn -> {:error, ErrorMessage.gateway_timeout("timed out")} end
+      ])
+
+      assert {:error, %ErrorMessage{code: :gateway_timeout}} =
+               Sandbox.list_networks_response(%{}, [])
     end
   end
 

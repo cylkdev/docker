@@ -8,22 +8,37 @@ defmodule Docker.StreamError do
   has no return value left to travel through. Raising is the only way the
   consumer can tell a truncated stream from a complete one.
 
-  The failure is carried by `:message` alone: raise with
-  `reason: term` and the term is rendered into the message text.
+  This is the one place in the library where a failure is not returned as
+  `{:error, ErrorMessage.t()}`. The `:error_message` field carries the same
+  struct the return path would have, so a caller that rescues can go back to
+  handling failures uniformly:
+
+      try do
+        Enum.to_list(stream)
+      rescue
+        error in Docker.StreamError -> {:error, error.error_message}
+      end
   """
 
-  defexception [:message]
+  defexception [:message, :error_message]
 
-  @type t :: %__MODULE__{message: String.t()}
+  @type t :: %__MODULE__{message: String.t(), error_message: ErrorMessage.t()}
 
   @impl true
   def exception(opts) do
-    %__MODULE__{message: opts |> Keyword.fetch!(:reason) |> describe()}
+    error_message = opts |> Keyword.fetch!(:reason) |> describe()
+
+    %__MODULE__{message: error_message.message, error_message: error_message}
   end
 
-  defp describe(:timeout),
-    do: "Docker stream stalled: no data received within the idle timeout"
+  defp describe(:timeout) do
+    ErrorMessage.gateway_timeout(
+      "Docker stream stalled: no data received within the idle timeout",
+      %{reason: :timeout}
+    )
+  end
 
-  defp describe(reason),
-    do: "Docker stream failed: #{inspect(reason)}"
+  defp describe(reason) do
+    ErrorMessage.bad_gateway("Docker stream failed: #{inspect(reason)}", %{reason: reason})
+  end
 end

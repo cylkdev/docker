@@ -29,7 +29,7 @@ defmodule Docker.Streaming do
   Returns a streaming session attached to a running container's stdio.
   """
   @spec open_attach(container_ref :: binary(), tty :: boolean(), opts :: keyword()) ::
-          {:ok, Session.t()} | {:error, term()}
+          Docker.result(Session.t())
   def open_attach(container_ref, tty, opts)
       when is_binary(container_ref) and is_boolean(tty) and is_list(opts) do
     open_upgrade(:post, build_attach_path(container_ref, opts), "", tty)
@@ -39,7 +39,7 @@ defmodule Docker.Streaming do
   Returns a streaming session driving an exec instance's stdio.
   """
   @spec open_exec_start(exec_id :: binary(), tty :: boolean(), opts :: keyword()) ::
-          {:ok, Session.t()} | {:error, term()}
+          Docker.result(Session.t())
   def open_exec_start(exec_id, tty, opts)
       when is_binary(exec_id) and is_boolean(tty) and is_list(opts) do
     body = JSON.encode!(%{"Detach" => false, "Tty" => tty})
@@ -73,8 +73,37 @@ defmodule Docker.Streaming do
         {:ok, Session.from_connection(conn_pid, tty)}
 
       {:error, reason} ->
-        {:error, reason}
+        {:error, upgrade_error(reason, path)}
     end
+  end
+
+  # The upgrade never completed, so there is no HTTP status to read a code
+  # from — only the reason OneOhOne failed with.
+  defp upgrade_error(%ErrorMessage{} = error, _path), do: error
+
+  defp upgrade_error({:shutdown, reason}, path), do: upgrade_error(reason, path)
+
+  defp upgrade_error(reason, path) when reason in [:enoent, :econnrefused] do
+    ErrorMessage.service_unavailable(
+      "Could not reach the Docker daemon at #{Config.socket_path()}. " <>
+        "Check that Docker is running.",
+      %{reason: reason, path: path, socket_path: Config.socket_path()}
+    )
+  end
+
+  defp upgrade_error(reason, path) when reason in [:eacces, :eperm] do
+    ErrorMessage.forbidden(
+      "Permission denied opening the Docker socket at #{Config.socket_path()}. " <>
+        "Check that the current user may access it.",
+      %{reason: reason, path: path, socket_path: Config.socket_path()}
+    )
+  end
+
+  defp upgrade_error(reason, path) do
+    ErrorMessage.bad_gateway(
+      "Could not open a streaming session with the Docker daemon: #{inspect(reason)}",
+      %{reason: reason, path: path, socket_path: Config.socket_path()}
+    )
   end
 
   @spec build_attach_path(binary(), keyword()) :: String.t()
