@@ -816,6 +816,87 @@ if Code.ensure_loaded?(SandboxRegistry) do
       set_responses(:put_archive, tuples)
     end
 
+    # ---- get_archive (container_ref, src_path, opts) ------------------------
+
+    @doc "Returns the registered response for `Docker.get_archive/3`."
+    def get_archive_response(container_ref, src_path, opts) do
+      doc_examples = [
+        "fn -> :ok end",
+        "fn (container_ref) -> ... end",
+        "fn (container_ref, src_path) -> ... end",
+        "fn (container_ref, src_path, opts) -> ... end"
+      ]
+
+      func = find!(:get_archive, container_ref, doc_examples)
+
+      case :erlang.fun_info(func)[:arity] do
+        0 -> func.()
+        1 -> func.(container_ref)
+        2 -> func.(container_ref, src_path)
+        3 -> func.(container_ref, src_path, opts)
+        _ -> raise_unsupported_arity(func, doc_examples)
+      end
+    end
+
+    @doc "Registers responses for `Docker.get_archive/3`."
+    def set_get_archive_responses(tuples) do
+      set_responses(:get_archive, tuples)
+    end
+
+    # ---- stat_archive (container_ref, src_path, opts) -----------------------
+
+    @doc "Returns the registered response for `Docker.stat_archive/3`."
+    def stat_archive_response(container_ref, src_path, opts) do
+      doc_examples = [
+        "fn -> :ok end",
+        "fn (container_ref) -> ... end",
+        "fn (container_ref, src_path) -> ... end",
+        "fn (container_ref, src_path, opts) -> ... end"
+      ]
+
+      func = find!(:stat_archive, container_ref, doc_examples)
+
+      case :erlang.fun_info(func)[:arity] do
+        0 -> func.()
+        1 -> func.(container_ref)
+        2 -> func.(container_ref, src_path)
+        3 -> func.(container_ref, src_path, opts)
+        _ -> raise_unsupported_arity(func, doc_examples)
+      end
+    end
+
+    @doc "Registers responses for `Docker.stat_archive/3`."
+    def set_stat_archive_responses(tuples) do
+      set_responses(:stat_archive, tuples)
+    end
+
+    # ---- wait_container (container_ref, params, opts) -----------------------
+
+    @doc "Returns the registered response for `Docker.wait_container/3`."
+    def wait_container_response(container_ref, params, opts) do
+      doc_examples = [
+        "fn -> :ok end",
+        "fn (container_ref) -> ... end",
+        "fn (container_ref, params) -> ... end",
+        "fn (container_ref, params, opts) -> ... end"
+      ]
+
+      func = find!(:wait_container, container_ref, doc_examples)
+
+      case :erlang.fun_info(func)[:arity] do
+        0 -> func.()
+        1 -> func.(container_ref)
+        2 -> func.(container_ref, params)
+        3 -> func.(container_ref, params, opts)
+        _ -> raise_unsupported_arity(func, doc_examples)
+      end
+    end
+
+    @doc "Registers responses for `Docker.wait_container/3`."
+    def set_wait_container_responses(tuples) do
+      set_responses(:wait_container, tuples)
+    end
+
     # =========================================================================
     # Sandbox control
     # =========================================================================

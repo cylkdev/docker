@@ -376,6 +376,145 @@ defmodule DockerTest do
     end
   end
 
+  describe "get_archive/3" do
+    test "returns the daemon's tar bytes unchanged" do
+      Sandbox.set_get_archive_responses([
+        {~r/.*/, fn _ref, _src -> {:ok, "fake-tar-bytes"} end}
+      ])
+
+      assert {:ok, "fake-tar-bytes"} = Docker.get_archive("c1", "/app/build", @sandbox)
+    end
+
+    test "errors when the path does not exist" do
+      Sandbox.set_get_archive_responses([
+        {~r/.*/,
+         fn _ref, _src ->
+           {:error, ErrorMessage.not_found("no such file", %{status: 404})}
+         end}
+      ])
+
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Docker.get_archive("c1", "/no/such/path", @sandbox)
+    end
+  end
+
+  describe "download_archive/4" do
+    setup do
+      dir =
+        Path.join(System.tmp_dir!(), "download_archive_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      {:ok, dir: dir}
+    end
+
+    test "writes the tar bytes verbatim", %{dir: dir} do
+      Sandbox.set_get_archive_responses([
+        {~r/.*/, fn _ref, _src -> {:ok, "fake-tar-bytes"} end}
+      ])
+
+      dest = Path.join(dir, "build.tar")
+
+      assert {:ok, ^dest} = Docker.download_archive("c1", "/app/build", dest, @sandbox)
+      assert File.read!(dest) === "fake-tar-bytes"
+    end
+
+    test "propagates a get_archive error without touching the filesystem", %{dir: dir} do
+      Sandbox.set_get_archive_responses([
+        {~r/.*/,
+         fn _ref, _src ->
+           {:error, ErrorMessage.not_found("no such file", %{status: 404})}
+         end}
+      ])
+
+      dest = Path.join(dir, "build.tar")
+
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Docker.download_archive("c1", "/nope", dest, @sandbox)
+
+      refute File.exists?(dest)
+    end
+
+    test "returns :internal_server_error when the destination is unwritable", %{dir: dir} do
+      Sandbox.set_get_archive_responses([
+        {~r/.*/, fn _ref, _src -> {:ok, "fake-tar-bytes"} end}
+      ])
+
+      # A path under a regular file cannot be created.
+      blocker = Path.join(dir, "blocker")
+      File.write!(blocker, "")
+      dest = Path.join(blocker, "build.tar")
+
+      assert {:error, %ErrorMessage{code: :internal_server_error} = error} =
+               Docker.download_archive("c1", "/app/build", dest, @sandbox)
+
+      assert error.details.dest_path === dest
+    end
+  end
+
+  describe "stat_archive/3" do
+    test "returns the decoded path stat" do
+      Sandbox.set_stat_archive_responses([
+        {~r/.*/, fn _ref, _src -> {:ok, %{"name" => "build", "size" => 4096}} end}
+      ])
+
+      assert {:ok, %{"name" => "build", "size" => 4096}} =
+               Docker.stat_archive("c1", "/app/build", @sandbox)
+    end
+
+    test "errors when the path does not exist" do
+      Sandbox.set_stat_archive_responses([
+        {~r/.*/,
+         fn _ref, _src ->
+           {:error, ErrorMessage.not_found("no such file", %{status: 404})}
+         end}
+      ])
+
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Docker.stat_archive("c1", "/no/such/path", @sandbox)
+    end
+  end
+
+  describe "wait_container/3" do
+    test "returns the exit status" do
+      Sandbox.set_wait_container_responses([
+        {~r/.*/, fn _ref -> {:ok, %{"StatusCode" => 0, "Error" => nil}} end}
+      ])
+
+      assert {:ok, %{"StatusCode" => 0}} = Docker.wait_container("c1", %{}, @sandbox)
+    end
+
+    test "a non-zero exit code is still {:ok, _}" do
+      Sandbox.set_wait_container_responses([
+        {~r/.*/, fn _ref -> {:ok, %{"StatusCode" => 137, "Error" => nil}} end}
+      ])
+
+      assert {:ok, %{"StatusCode" => 137}} = Docker.wait_container("c1", %{}, @sandbox)
+    end
+
+    test "passes the condition through" do
+      Sandbox.set_wait_container_responses([
+        {~r/.*/, fn _ref, params -> {:ok, %{"StatusCode" => 0, "condition" => params}} end}
+      ])
+
+      assert {:ok, %{"condition" => %{condition: "next-exit"}}} =
+               Docker.wait_container("c1", %{condition: "next-exit"}, @sandbox)
+    end
+
+    test "errors when the container does not exist" do
+      Sandbox.set_wait_container_responses([
+        {~r/.*/,
+         fn _ref ->
+           {:error, ErrorMessage.not_found("no such container", %{status: 404})}
+         end}
+      ])
+
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Docker.wait_container("ghost", %{}, @sandbox)
+    end
+  end
+
   describe "Util.create_tar/3" do
     test "builds a tar from a local directory rooted at its basename" do
       dir = Path.join(System.tmp_dir!(), "put_archive_test_#{System.unique_integer([:positive])}")

@@ -36,7 +36,10 @@ defmodule Docker.SandboxTest do
     {:exec_inspect, 2},
     {:exec_run, 3},
     {:exec_run_with_status, 3},
-    {:put_archive, 4}
+    {:put_archive, 4},
+    {:get_archive, 3},
+    {:stat_archive, 3},
+    {:wait_container, 3}
   ]
 
   # ---------------------------------------------------------------------------

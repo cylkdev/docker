@@ -594,6 +594,262 @@ defmodule Docker.Containers do
   end
 
   @doc """
+  Downloads a path from a container's filesystem as a tar archive.
+
+  The read counterpart to `put_archive/4`. The container does not need to be
+  running — this works on stopped containers too.
+
+  The daemon always wraps the requested path in a tar, so asking for a single
+  file returns a tar containing one entry. This function hands back that outer
+  archive verbatim; it does not unwrap it. Use `download_archive/4` with
+  `extract: true` to unpack to disk, or `:erl_tar` for in-memory access.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `src_path` — the absolute path inside the container to download.
+      Example: `"/app/build"` or `"/etc/myapp/config.toml"`.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, tar}` — the tar archive as a binary.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:bad_request` when
+      `src_path` is not absolute; `:not_found` when the container or the
+      path inside it does not exist.
+
+  ## Examples
+
+      {:ok, tar} = Docker.Containers.get_archive("my-container", "/app/build")
+      {:ok, files} = :erl_tar.extract({:binary, tar}, [:memory])
+  """
+  @spec get_archive(Docker.container_ref(), binary(), Docker.options()) ::
+          Docker.result(binary())
+  def get_archive(container_ref, src_path, options \\ [])
+      when is_binary(container_ref) and is_binary(src_path) do
+    if sandbox?(options) do
+      sandbox_get_archive_response(container_ref, src_path, options)
+    else
+      do_get_archive(container_ref, src_path, options)
+    end
+  end
+
+  defp do_get_archive(container_ref, src_path, options) do
+    url = archive_url(container_ref, src_path)
+
+    # Req unpacks an `application/x-tar` body by default, which would hand
+    # back entries instead of the archive. `:raw` turns body decoding off.
+    options = Keyword.put_new(options, :into, :raw)
+
+    case Client.request(:get, url, nil, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Downloads a path from a container and writes it to the local filesystem.
+
+  Calls `get_archive/3` and writes the returned bytes to `dest_path`. The file
+  written is the daemon's outer tar, unmodified — this adds persistence, not
+  extraction. Use `:erl_tar` on the result when you need the contents.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `src_path` — the absolute path inside the container to download.
+    - `dest_path` — the local path to write the tar to.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, dest_path}` — written successfully.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. Errors from
+      `get_archive/3` propagate unchanged; a failed write is
+      `:internal_server_error`.
+
+  ## Examples
+
+      {:ok, _} =
+        Docker.Containers.download_archive("my-container", "/app/build", "/tmp/build.tar")
+
+      :ok = :erl_tar.extract("/tmp/build.tar", [{:cwd, ~c"/tmp/out"}])
+  """
+  @spec download_archive(
+          Docker.container_ref(),
+          binary(),
+          binary(),
+          Docker.options()
+        ) :: Docker.result(binary())
+  def download_archive(container_ref, src_path, dest_path, options \\ [])
+      when is_binary(container_ref) and is_binary(src_path) and is_binary(dest_path) do
+    with {:ok, tar} <- get_archive(container_ref, src_path, options),
+         :ok <- write_tar(tar, dest_path) do
+      {:ok, dest_path}
+    end
+  end
+
+  defp write_tar(tar, dest_path) do
+    case File.write(dest_path, tar) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         ErrorMessage.internal_server_error(
+           "Could not write the tar archive #{dest_path}: #{:file.format_error(reason)}",
+           %{dest_path: dest_path, reason: reason}
+         )}
+    end
+  end
+
+  @doc """
+  Returns metadata about a path inside a container without downloading it.
+
+  Issues a `HEAD` against the same endpoint as `get_archive/3`. The daemon
+  sends no body, so this is the cheap way to check that a path exists before
+  pulling down a potentially large directory.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `src_path` — the absolute path inside the container to stat.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, stat}` — a map with the daemon's keys: `"name"`, `"size"`,
+      `"mode"`, `"mtime"`, and `"linkTarget"`.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when the
+      container or path does not exist; `:internal_server_error` when the
+      daemon's stat header is missing or cannot be decoded.
+
+  ## Examples
+
+      {:ok, stat} = Docker.Containers.stat_archive("my-container", "/app/build")
+      stat["size"]  # => 4096
+  """
+  @spec stat_archive(Docker.container_ref(), binary(), Docker.options()) ::
+          Docker.result(map())
+  def stat_archive(container_ref, src_path, options \\ [])
+      when is_binary(container_ref) and is_binary(src_path) do
+    if sandbox?(options) do
+      sandbox_stat_archive_response(container_ref, src_path, options)
+    else
+      do_stat_archive(container_ref, src_path, options)
+    end
+  end
+
+  defp do_stat_archive(container_ref, src_path, options) do
+    url = archive_url(container_ref, src_path)
+
+    with {:ok, %{headers: headers}} <- Client.request(:head, url, nil, options) do
+      decode_path_stat(headers, container_ref, src_path)
+    end
+  end
+
+  @stat_header "x-docker-container-path-stat"
+
+  defp decode_path_stat(headers, container_ref, src_path) do
+    with {:ok, encoded} <- fetch_stat_header(headers, container_ref, src_path),
+         {:ok, json} <- decode_stat_base64(encoded, container_ref, src_path),
+         {:ok, stat} when is_map(stat) <- decode_stat_json(json, container_ref, src_path) do
+      {:ok, stat}
+    else
+      {:ok, _not_a_map} -> {:error, stat_error(container_ref, src_path, :not_an_object)}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  defp fetch_stat_header(headers, container_ref, src_path) do
+    case List.keyfind(headers, @stat_header, 0) do
+      {_key, value} when is_binary(value) -> {:ok, value}
+      _ -> {:error, stat_error(container_ref, src_path, :missing_header)}
+    end
+  end
+
+  defp decode_stat_base64(encoded, container_ref, src_path) do
+    case Base.decode64(encoded) do
+      {:ok, json} -> {:ok, json}
+      :error -> {:error, stat_error(container_ref, src_path, :invalid_base64)}
+    end
+  end
+
+  defp decode_stat_json(json, container_ref, src_path) do
+    case JSON.decode(json) do
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, _reason} -> {:error, stat_error(container_ref, src_path, :invalid_json)}
+    end
+  end
+
+  defp stat_error(container_ref, src_path, reason) do
+    ErrorMessage.internal_server_error(
+      "Could not decode the path stat the Docker daemon returned for #{src_path}",
+      %{container_ref: container_ref, src_path: src_path, reason: reason}
+    )
+  end
+
+  defp archive_url(container_ref, src_path) do
+    Util.append_query_string("/containers/#{container_ref}/archive", %{path: src_path})
+  end
+
+  @doc """
+  Blocks until a container stops, then returns its exit status.
+
+  This endpoint long-polls: the daemon holds the connection open for as long
+  as the container keeps running, which may be hours. `wait_container/3`
+  therefore waits indefinitely by default. Pass `:receive_timeout` to bound
+  it — a timeout that elapses comes back as `:gateway_timeout`.
+
+  A container exiting non-zero is a successful call reporting a failed
+  container, so it returns `{:ok, _}`. An `{:error, _}` here means the Docker
+  call itself failed.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `params` — optional map of Docker Engine query parameters. Useful keys:
+      - `:condition` — when to return: `"not-running"` (the default),
+        `"next-exit"`, or `"removed"`.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, status}` — a map with the daemon's keys: `"StatusCode"` (the
+      container's exit code) and `"Error"`, which reports why the wait ended
+      rather than why the process did.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when the
+      container does not exist; `:bad_request` for an unknown condition.
+
+  ## Examples
+
+      {:ok, %{"StatusCode" => 0}} = Docker.Containers.wait_container("my-worker")
+
+      # Bound the wait to 5 seconds
+      Docker.Containers.wait_container("my-worker", %{}, receive_timeout: 5_000)
+  """
+  @spec wait_container(Docker.container_ref(), map(), Docker.options()) ::
+          Docker.result(map())
+  def wait_container(container_ref, params \\ %{}, options \\ [])
+      when is_binary(container_ref) and is_map(params) do
+    if sandbox?(options) do
+      sandbox_wait_container_response(container_ref, params, options)
+    else
+      do_wait_container(container_ref, params, options)
+    end
+  end
+
+  defp do_wait_container(container_ref, params, options) do
+    url = Util.append_query_string("/containers/#{container_ref}/wait", params)
+    options = Keyword.put_new(options, :receive_timeout, :infinity)
+
+    case Client.request(:post, url, nil, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
   Returns `true` if the container map from `find_container/2` says the
   container is currently running.
 
@@ -705,6 +961,21 @@ defmodule Docker.Containers do
     defdelegate sandbox_put_archive_response(container_ref, dest_path, params, options),
       to: Docker.Sandbox,
       as: :put_archive_response
+
+    @doc false
+    defdelegate sandbox_get_archive_response(container_ref, src_path, options),
+      to: Docker.Sandbox,
+      as: :get_archive_response
+
+    @doc false
+    defdelegate sandbox_stat_archive_response(container_ref, src_path, options),
+      to: Docker.Sandbox,
+      as: :stat_archive_response
+
+    @doc false
+    defdelegate sandbox_wait_container_response(container_ref, params, options),
+      to: Docker.Sandbox,
+      as: :wait_container_response
   else
     defp sandbox_disabled?, do: true
 
@@ -791,6 +1062,36 @@ defmodule Docker.Containers do
 
       container_ref: #{inspect(container_ref)}
       dest_path: #{inspect(dest_path)}
+      params: #{inspect(params)}
+      options: #{inspect(options)}
+      """
+    end
+
+    defp sandbox_get_archive_response(container_ref, src_path, options) do
+      raise """
+      Cannot use sandbox mode outside of dev/test environment.
+
+      container_ref: #{inspect(container_ref)}
+      src_path: #{inspect(src_path)}
+      options: #{inspect(options)}
+      """
+    end
+
+    defp sandbox_stat_archive_response(container_ref, src_path, options) do
+      raise """
+      Cannot use sandbox mode outside of dev/test environment.
+
+      container_ref: #{inspect(container_ref)}
+      src_path: #{inspect(src_path)}
+      options: #{inspect(options)}
+      """
+    end
+
+    defp sandbox_wait_container_response(container_ref, params, options) do
+      raise """
+      Cannot use sandbox mode outside of dev/test environment.
+
+      container_ref: #{inspect(container_ref)}
       params: #{inspect(params)}
       options: #{inspect(options)}
       """

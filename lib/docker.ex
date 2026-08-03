@@ -356,4 +356,14 @@ defmodule Docker do
 
   defdelegate put_archive(container_ref, dest_path, tar_path, options \\ []),
     to: Docker.Containers
+
+  defdelegate get_archive(container_ref, src_path, options \\ []), to: Docker.Containers
+
+  defdelegate download_archive(container_ref, src_path, dest_path, options \\ []),
+    to: Docker.Containers
+
+  defdelegate stat_archive(container_ref, src_path, options \\ []), to: Docker.Containers
+
+  defdelegate wait_container(container_ref, params \\ %{}, options \\ []),
+    to: Docker.Containers
 end

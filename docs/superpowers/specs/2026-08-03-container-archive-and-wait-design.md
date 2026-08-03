@@ -31,9 +31,12 @@ dispatches either to a sandbox stub or to a private `do_*` implementation, with
 Issues `GET /containers/#{container_ref}/archive?path=#{src_path}` with a `nil`
 request body and returns `{:ok, tar_binary}`.
 
-The daemon responds with `Content-Type: application/x-tar`, which
-`Docker.Client` does not decode — the body arrives as a raw binary and is
-returned unchanged. No changes to `Docker.Client` are required.
+The daemon responds with `Content-Type: application/x-tar`, which Req unpacks
+by default — it would hand back tar entries instead of the archive, and errors
+outright on bytes that are not a complete tar. `get_archive/3` therefore
+defaults `:into` to `:raw`, which turns Req's body decoding off
+(`lib/docker/client.ex:283`), and the body arrives as a raw binary. A caller
+passing `:into` explicitly wins. No changes to `Docker.Client` are required.
 
 **The returned tar is the daemon's outer archive, verbatim.** Docker always
 wraps the requested path in a tar, so `get_archive("c1", "/release.tar.gz")`
@@ -64,43 +67,25 @@ Errors come from the existing `Docker.Client` mapping:
       ) :: Docker.result(binary())
 ```
 
-Calls `get_archive/3` and puts the result on the local filesystem at
-`dest_path`, returning `{:ok, dest_path}`. The argument order mirrors
+Calls `get_archive/3` and writes the returned bytes to `dest_path`, returning
+`{:ok, dest_path}`. The file written is the daemon's outer tar, unmodified —
+this function adds persistence, not extraction. The argument order mirrors
 `put_archive/4`: container ref, then the remote path, then the local path.
 
-`options` accepts `:extract` (boolean, default `false`) in addition to the
-standard options. **`:extract` changes what `dest_path` means**, because one
-path argument cannot be both a file to create and a directory to populate:
+```elixir
+{:ok, "/tmp/build.tar"} =
+  Docker.download_archive("my-container", "/app/build", "/tmp/build.tar")
 
-- `extract: false` (default) — `dest_path` is the tar file to write. The bytes
-  are written verbatim; the file is the daemon's outer archive, unmodified.
+:ok = :erl_tar.extract("/tmp/build.tar", [{:cwd, ~c"/tmp/out"}])
+```
 
-  ```elixir
-  {:ok, "/tmp/build.tar"} =
-    Docker.download_archive("my-container", "/app/build", "/tmp/build.tar")
-  ```
+Extracting is the caller's step, in whatever way and to whatever location suits
+them. This library does not unpack archives on their behalf.
 
-- `extract: true` — `dest_path` is a directory to extract into. It is created
-  with `File.mkdir_p/1` if absent, then the archive is unpacked there with
-  `:erl_tar.extract({:binary, tar}, [{:cwd, dest_path}])`. Entries land relative
-  to `dest_path`, so downloading `/app/build` yields `<dest_path>/build/...` —
-  the inverse of how `put_archive/4` extracts relative to its `dest_path`.
-
-  ```elixir
-  {:ok, "/tmp/out"} =
-    Docker.download_archive("my-container", "/app/build", "/tmp/out", extract: true)
-  ```
-
-No intermediate tar file is written in either mode; extraction reads the
-in-memory binary directly. The outer archive is never gzipped, so `:compressed`
-is not passed to `:erl_tar`.
-
-Any error from `get_archive/3` propagates unchanged. A failed write, `mkdir_p`,
-or extraction becomes `{:error, ErrorMessage.internal_server_error(...)}`
-carrying `dest_path` and the underlying reason in its details, worded to match
-`Docker.Util.create_tar/3`'s existing "Could not write the tar archive"
-failures. Extraction failures reuse `create_tar/3`'s two-clause handling of
-`:erl_tar`'s `{:error, {name, reason}}` and `{:error, reason}` shapes.
+Any error from `get_archive/3` propagates unchanged. A failed write becomes
+`{:error, ErrorMessage.internal_server_error(...)}` carrying `dest_path` and the
+POSIX reason in its details, worded to match `Docker.Util.create_tar/3`'s
+existing "Could not write the tar archive" failures.
 
 Because `download_archive/4` is a thin wrapper over `get_archive/3`, it gets no
 sandbox stub of its own — under sandbox mode the inner `get_archive/3` call is
@@ -194,10 +179,8 @@ parity with `put_archive/4`. `download_archive/4` does not, per above.
   `:internal_server_error`.
 - `download_archive/4` — a test writing to a temp path, asserting the file
   contents match the registered `get_archive` response byte-for-byte; a test
-  with `extract: true` against a real `:erl_tar`-built archive, asserting the
-  expected files exist on disk with the expected contents and that no tar file
-  is left behind; and tests asserting an unwritable `dest_path` yields
-  `:internal_server_error` in each mode.
+  that a `get_archive/3` error propagates without creating the file; and a
+  test that an unwritable `dest_path` yields `:internal_server_error`.
 - `wait_container/3` — a test asserting a non-zero `"StatusCode"` still returns
   `{:ok, _}`.
 - `test/docker/engine/sandbox_test.exs` — add `{:get_archive, 3}`,
@@ -206,13 +189,9 @@ parity with `put_archive/4`. `download_archive/4` does not, per above.
 
 ## Out of scope
 
-- Unwrapping the outer tar in `get_archive/3`. It always returns the raw
-  archive; extraction is available only through `download_archive/4`'s
-  `:extract` option, or by calling `:erl_tar` directly.
-- In-memory extraction. `:extract` writes to disk; there is no option that
-  returns `[{name, bytes}]` without touching the filesystem. Callers wanting
-  that use `:erl_tar.extract({:binary, tar}, [:memory])` on `get_archive/3`'s
-  result.
+- Extraction of any kind. `get_archive/3` returns the raw archive and
+  `download_archive/4` writes it; callers unpack with `:erl_tar` themselves,
+  to memory or to whatever location they want.
 - Streaming the tar body. `get_archive/3` buffers the whole archive in memory,
   matching `put_archive/4` reading the whole file with `File.read/1`. A
   streaming variant can be added later if large downloads need it.
