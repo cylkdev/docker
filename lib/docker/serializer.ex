@@ -3,9 +3,8 @@ defmodule Docker.Serializer do
   Recursively transforms Docker Engine responses into an internal "Elixir"
   shape.
 
-  `deserialize/2` trims and unquotes incoming string keys, optionally
-  normalises them through a caller-supplied `normalize_key/1` module, recases
-  them (default `:snake`), and converts them to atoms. Leaf values are passed
+  `deserialize/2` trims and unquotes incoming string keys, recases them
+  (default `:snake`), and converts them to atoms. Leaf values are passed
   through the optional `:transform_value` function unchanged otherwise.
 
   Keys become atoms with `String.to_atom/1`. Atoms are not garbage-collected,
@@ -23,8 +22,6 @@ defmodule Docker.Serializer do
 
     * `:to_case` -- target casing for keys. Defaults to `:snake`. See
       `Docker.Casing` for the full list.
-    * `:normalize_key` -- a module exporting `normalize_key/1`, applied to
-      each string key before recasing.
     * `:transform_value` -- a 1-arity function or `{module, function}` tuple
       applied to each leaf value.
 
@@ -41,8 +38,8 @@ defmodule Docker.Serializer do
   # Abstraction Function:
   #   The module represents one stateless transformation:
   #     `deserialize/2` :: (term, opts) -> a same-shape tree where
-  #         binary keys are normalised, recased, and atomized, with
-  #         leaves optionally transformed via `:transform_value`.
+  #         binary keys are recased and atomized, with leaves
+  #         optionally transformed via `:transform_value`.
   #
   # Data Invariant:
   #   1. The recursive walker `transform/3` traverses three shapes:
@@ -50,26 +47,16 @@ defmodule Docker.Serializer do
   #      term are treated as leaves and visited by the value transform
   #      only.
   #   2. `deserialize/2`'s key transform applies in order: trim and
-  #      strip `"`, optional `opts[:normalize_key].normalize_key/1`,
-  #      `Casing.to_case` with `opts[:to_case]` (default `:snake`),
-  #      and finally `String.to_atom/1`. Non-binary keys are returned
-  #      unchanged. If the normaliser returns an atom, atomization is
-  #      skipped and the atom is used directly.
-  #   3. `:normalize_key`, when set, must be a module exporting
-  #      `normalize_key/1`. Missing modules or missing exports raise
-  #      `ArgumentError`. The function's return must be `binary()` or
-  #      `atom()`; any other return raises `RuntimeError`.
-  #   4. `:transform_value`, when set, must be a 1-arity function or a
+  #      strip `"`, `Casing.to_case` with `opts[:to_case]` (default
+  #      `:snake`), and finally `String.to_atom/1`. Non-binary keys are
+  #      returned unchanged.
+  #   3. `:transform_value`, when set, must be a 1-arity function or a
   #      `{module, function}` tuple. Any other value raises
   #      `ArgumentError`.
   #
   # Commutative Diagram (deserialize key path):
   #
   #   binary_key  --trim+strip-->  s1
-  #         |                       |
-  #         |                       | normalize_key (optional)
-  #         v                       v
-  #         (skip)               s2 (binary or atom)
   #                                 |
   #                                 | Casing.to_case + String.to_atom
   #                                 v
@@ -79,13 +66,10 @@ defmodule Docker.Serializer do
   Returns an Elixir-shaped tree with atom keys derived from `term`.
 
   Walks plain non-struct maps, lists, and 2-tuples. Each binary key is
-  trimmed, stripped of `"`, optionally normalised via
-  `opts[:normalize_key].normalize_key/1`, recased through
-  `Docker.Casing.to_case/3`, and atomized with `String.to_atom/1`.
-  Non-binary keys are returned unchanged. If the normaliser returns an
-  atom, atomization is skipped and that atom is used directly. Leaves
-  are passed through `opts[:transform_value]` when set, otherwise
-  unchanged.
+  trimmed, stripped of `"`, recased through `Docker.Casing.to_case/3`,
+  and atomized with `String.to_atom/1`. Non-binary keys are returned
+  unchanged. Leaves are passed through `opts[:transform_value]` when
+  set, otherwise unchanged.
 
   ## Parameters
 
@@ -94,9 +78,6 @@ defmodule Docker.Serializer do
 
         * `:to_case` - target casing for keys. Default `:snake`.
           Forwarded to `Docker.Casing.to_case/3`.
-        * `:normalize_key` - module exporting `normalize_key/1`,
-          applied to each string key after trimming. Must return
-          binary or atom.
         * `:transform_value` - 1-arity function or `{module, function}`
           tuple applied to each leaf value.
 
@@ -106,18 +87,13 @@ defmodule Docker.Serializer do
   ## Returns
 
   `term()`. A tree mirroring the input shape with binary keys
-  rewritten as atoms (or whichever atom the normaliser produced) and
-  leaves passed through the optional value transformer. Structs and
-  non-binary keys are left untouched.
+  rewritten as atoms and leaves passed through the optional value
+  transformer. Structs and non-binary keys are left untouched.
 
   ## Raises
 
-    - `ArgumentError` - if `opts[:normalize_key]` is set but the
-      module does not export `normalize_key/1`.
     - `ArgumentError` - if `opts[:transform_value]` is set to a value
       that is not a 1-arity function or `{module, function}` tuple.
-    - `RuntimeError` - if a configured `normalize_key/1` returns
-      something that is neither binary nor atom.
     - Any exception `Docker.Casing.to_case/3` raises is propagated.
 
   ## Examples
@@ -132,18 +108,13 @@ defmodule Docker.Serializer do
     transform(term, fn key -> deserialize_key(key, opts) end, val_fun)
   end
 
-  # Transforms a single key. Binary keys are trimmed, stripped of `"`, optionally
-  # normalized, snake-cased, and atomized. Non-binary keys are returned unchanged.
+  # Transforms a single key. Binary keys are trimmed, stripped of `"`, snake-cased,
+  # and atomized. Non-binary keys are returned unchanged.
   defp deserialize_key(key, opts) when is_binary(key) do
-    case key |> trim_and_strip_quotes() |> normalize_key(opts) do
-      string_key when is_binary(string_key) ->
-        string_key
-        |> Casing.to_case(opts[:to_case] || :snake, opts)
-        |> String.to_atom()
-
-      skipped_key when is_atom(skipped_key) ->
-        skipped_key
-    end
+    key
+    |> trim_and_strip_quotes()
+    |> Casing.to_case(opts[:to_case] || :snake, opts)
+    |> String.to_atom()
   end
 
   defp deserialize_key(key, _opts), do: key
@@ -192,33 +163,5 @@ defmodule Docker.Serializer do
   defp apply_transform(_val, term) do
     raise ArgumentError,
           "Expected transform_value to be a 1-arity function or {module, function}, got: #{inspect(term)}"
-  end
-
-  # Applies `opts[:normalize_key].normalize_key/1` when configured; otherwise returns
-  # `val` unchanged. Raises if the result is neither binary nor atom.
-  defp normalize_key(val, opts) do
-    case opts[:normalize_key] do
-      nil ->
-        val
-
-      mod ->
-        ensure_normalize_key_exported!(mod)
-
-        case mod.normalize_key(val) do
-          val when is_binary(val) -> val
-          val when is_atom(val) -> val
-          _ -> raise "Expected normalize_key/1 to return binary or atom, got: #{inspect(val)}"
-        end
-    end
-  end
-
-  # Raises `ArgumentError` if `mod` does not export `normalize_key/1`. Forces module
-  # load first so the check works for modules that have not yet been referenced at runtime.
-  defp ensure_normalize_key_exported!(mod) do
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :normalize_key, 1) do
-      :ok
-    else
-      raise ArgumentError, "Expected module #{mod} to implement normalize_key/1"
-    end
   end
 end
