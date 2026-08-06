@@ -7,6 +7,11 @@ defmodule Docker.UtilTest do
   matches, while `{"label":{"env":"prod"}}` and a top-level `["label=env=prod"]`
   are both rejected with `invalid filter`. So every shape below has to arrive at
   that one wire format.
+
+  Labels are written as a map. The `"env=prod"` string is still accepted as a
+  value because that is what the Engine requires and what the Python and Go
+  SDKs hand over, but the CLI's flat `["label=env=prod"]` is not an API shape
+  and is rejected.
   """
 
   use ExUnit.Case, async: true
@@ -20,27 +25,27 @@ defmodule Docker.UtilTest do
     end
   end
 
-  describe "encode_filters/1 with the CLI list form" do
-    test "splits a single \"key=value\" entry" do
-      assert {:ok, %{"label" => ["name"]}} = encode(["label=name"])
+  describe "encode_filters/1 rejects the CLI's argv form" do
+    test "a flat \"name=value\" entry is an error, not a parse" do
+      assert {:error, %ErrorMessage{code: :bad_request} = error} = encode(["label=env=prod"])
+      assert error.message =~ ~s|label: %{"env" => "prod"}|
     end
 
-    test "splits on the first = only, so label values keep theirs" do
-      assert {:ok, %{"label" => ["env=prod"]}} = encode(["label=env=prod"])
+    test "a bare string is an error" do
+      assert {:error, %ErrorMessage{code: :bad_request}} = encode("status=running")
     end
 
-    test "merges repeated keys into one list rather than dropping either" do
+    test "the error names the offending entry" do
+      assert {:error, %ErrorMessage{} = error} = encode(["status=running"])
+      assert error.message =~ "status=running"
+      assert error.details === %{filter: "status=running"}
+    end
+  end
+
+  describe "encode_filters/1 with repeated names" do
+    test "merges into one list rather than dropping either" do
       assert {:ok, %{"label" => ["env=prod", "tier=worker"]}} =
-               encode(["label=env=prod", "label=tier=worker"])
-    end
-
-    test "carries several distinct filters" do
-      assert {:ok, %{"label" => ["env=prod"], "status" => ["running"]}} =
-               encode(["label=env=prod", "status=running"])
-    end
-
-    test "accepts a bare string as a single filter" do
-      assert {:ok, %{"status" => ["running"]}} = encode("status=running")
+               encode(label: %{"env" => "prod"}, label: %{"tier" => "worker"})
     end
   end
 
@@ -101,7 +106,7 @@ defmodule Docker.UtilTest do
       assert {:error, %ErrorMessage{code: :bad_request}} = encode(42)
     end
 
-    test "returns bad_request for a list entry with no =" do
+    test "returns bad_request for a bare list entry" do
       assert {:error, %ErrorMessage{code: :bad_request} = error} = encode(["label"])
       assert error.message =~ "label"
     end

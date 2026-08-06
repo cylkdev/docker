@@ -80,8 +80,8 @@ defmodule Docker.Image do
       - `:filters` — optional. Recognised names: `:before`, `:dangling`,
         `:label`, `:reference`, `:since`, `:until`. Takes a label map
         (`[label: %{"env" => "prod"}]`), a list of strings
-        (`[reference: ["alpine*"]]`), a lone value (`[dangling: "true"]`), or
-        the CLI's own form (`["label=env=prod"]`). Anything else returns
+        (`[reference: ["alpine*"]]`), or a lone value (`[dangling: "true"]`).
+        Anything else, including the CLI's `["label=env=prod"]`, returns
         `{:error, error}` with code `:bad_request`.
     - `options` — optional keyword list. See `Docker`
       for the options table.

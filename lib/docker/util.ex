@@ -71,15 +71,19 @@ defmodule Docker.Util do
 
   # The Engine takes `filters` as a JSON object mapping a filter name to a list
   # of string values: `{"label":["env=prod"],"status":["running"]}`. Verified
-  # against a live daemon, it rejects both a map at the value level
-  # (`{"label":{"env":"prod"}}`) and a top-level list (`["label=env=prod"]`)
-  # with `invalid filter`, so every accepted shape has to reach that one format.
+  # against a live daemon, it rejects a map at the value level
+  # (`{"label":{"env":"prod"}}`) with `invalid filter`, so `"env=prod"` is its
+  # required encoding and this is the one place that builds it.
   #
-  # Callers write filters four ways — the CLI's `["label=env=prod"]`, the
-  # documented `[label: %{"env" => "prod"}]`, already-formatted
-  # `%{label: ["env=prod"]}`, and a bare `"status=running"` — so each is
-  # normalized to `%{binary() => [binary()]}` before encoding. Anything else is
-  # a `:bad_request` rather than a raise from inside the traversal.
+  # Callers name a filter and give it a value: `[label: %{"env" => "prod"}]`
+  # writes labels as a map, and `%{label: ["env=prod"]}` passes values already
+  # encoded, as the Python and Go SDKs hand them over. Both normalize to
+  # `%{binary() => [binary()]}` before encoding. Anything else is a
+  # `:bad_request` rather than a raise from inside the traversal.
+  #
+  # The CLI's own `["label=env=prod"]` is not accepted. That is an argv token,
+  # not an API shape — no SDK emits it and the daemon rejects it — so it is an
+  # error naming the map form rather than a parse this has to keep working.
   @doc false
   @spec encode_filters(term()) :: {:ok, binary()} | {:error, ErrorMessage.t()}
   def encode_filters(filters) do
@@ -88,17 +92,12 @@ defmodule Docker.Util do
     end
   end
 
-  # A bare string is a single CLI-style filter.
-  defp normalize_filters(filters) when is_binary(filters) do
-    normalize_filters([filters])
-  end
-
   defp normalize_filters(filters)
        when is_list(filters) or (is_map(filters) and not is_struct(filters)) do
     Enum.reduce_while(filters, {:ok, %{}}, fn entry, {:ok, acc} ->
       case normalize_entry(entry) do
-        # Repeated names accumulate: `["label=a", "label=b"]` is two values for
-        # one filter, and Docker ANDs them.
+        # Repeated names accumulate rather than overwrite, so a name given
+        # twice filters on both values, which Docker ANDs.
         {:ok, {name, values}} ->
           {:cont, {:ok, Map.update(acc, name, values, &(&1 ++ values))}}
 
@@ -111,26 +110,11 @@ defmodule Docker.Util do
   defp normalize_filters(filters) do
     {:error,
      ErrorMessage.bad_request(
-       "Expected filters as a map, keyword list, or list of \"name=value\" " <>
-         "strings, got: #{inspect(filters)}",
+       "Expected filters as a map or keyword list, e.g. " <>
+         "[label: %{\"env\" => \"prod\"}, status: [\"running\"]], " <>
+         "got: #{inspect(filters)}",
        %{filters: filters}
      )}
-  end
-
-  # Splits on the first `=` only, so a label value keeps its own:
-  # `"label=env=prod"` is the filter `label` with value `"env=prod"`.
-  defp normalize_entry(entry) when is_binary(entry) do
-    case String.split(entry, "=", parts: 2) do
-      [name, value] ->
-        with {:ok, name} <- normalize_name(name), do: {:ok, {name, [value]}}
-
-      [_no_equals] ->
-        {:error,
-         ErrorMessage.bad_request(
-           "Expected filter #{inspect(entry)} to be a \"name=value\" string",
-           %{filter: entry}
-         )}
-    end
   end
 
   defp normalize_entry({key, value}) do
@@ -140,10 +124,13 @@ defmodule Docker.Util do
     end
   end
 
+  # Catches the CLI's `["label=env=prod"]`, which arrives here as a bare string
+  # rather than a pair.
   defp normalize_entry(entry) do
     {:error,
      ErrorMessage.bad_request(
-       "Expected a filter as a \"name=value\" string or a {name, value} pair, " <>
+       "Expected a filter as a {name, value} pair, e.g. " <>
+         "[label: %{\"env\" => \"prod\"}] or [status: [\"running\"]], " <>
          "got: #{inspect(entry)}",
        %{filter: entry}
      )}

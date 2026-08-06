@@ -40,8 +40,8 @@ defmodule Docker.Network do
       - `:filters` — optional. Recognised names: `:dangling`, `:driver`,
         `:id`, `:label`, `:name`, `:scope`, `:type`. Takes a label map
         (`[label: %{"env" => "prod"}]`), a list of strings
-        (`[driver: ["bridge"]]`), a lone value (`[driver: "bridge"]`), or the
-        CLI's own form (`["driver=bridge"]`). Anything else returns
+        (`[driver: ["bridge"]]`), or a lone value (`[driver: "bridge"]`).
+        Anything else, including the CLI's `["driver=bridge"]`, returns
         `{:error, error}` with code `:bad_request`.
     - `options` — optional keyword list. See `Docker` for the options table.
 

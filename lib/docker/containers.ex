@@ -126,14 +126,15 @@ defmodule Docker.Containers do
         `is-task`). Accepted forms:
 
             [label: %{"tier" => "worker"}]   # map of label key => value
-            [label: ["tier=worker"]]         # values already formatted
+            [label: ["tier=worker"]]         # values already encoded
             [status: ["running"]]            # list of strings
             [status: "running"]              # a lone value
-            ["label=tier=worker"]            # as the docker CLI writes it
-            "status=running"                 # a lone filter
 
-        A shape that is none of these returns `{:error, error}` with code
-        `:bad_request` rather than raising.
+        `:label` is written as a map; the library builds the `"key=value"`
+        strings the Engine requires. The docker CLI's own
+        `["label=tier=worker"]` is an argv token rather than an API shape and
+        returns `{:error, error}` with code `:bad_request`, as does any other
+        shape.
     - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
