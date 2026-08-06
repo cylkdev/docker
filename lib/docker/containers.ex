@@ -118,13 +118,22 @@ defmodule Docker.Containers do
     - `params` — optional map of Docker Engine query parameters: `:all`
       (boolean, include stopped containers), `:limit` (integer), `:size`
       (boolean).
-      - `:filters` — optional keyword list: `:ancestor`, `:before`, `:exited`,
-        `:expose`, `:health`, `:id`, `:isolation`, `:is_task`, `:label`,
-        `:name`, `:network`, `:publish`, `:since`, `:status`, `:volume`.
-        `:label` takes a `%{binary() => binary()}` map; every other filter
-        takes a list of strings. Several filters may be combined and all must
-        match (AND). Underscored keys are hyphenated on the wire (`:is_task`
-        -> `is-task`).
+      - `:filters` — optional. Recognised names: `:ancestor`, `:before`,
+        `:exited`, `:expose`, `:health`, `:id`, `:isolation`, `:is_task`,
+        `:label`, `:name`, `:network`, `:publish`, `:since`, `:status`,
+        `:volume`. Several filters may be combined and all must match (AND).
+        Underscored names are hyphenated on the wire (`:is_task` ->
+        `is-task`). Accepted forms:
+
+            [label: %{"tier" => "worker"}]   # map of label key => value
+            [label: ["tier=worker"]]         # values already formatted
+            [status: ["running"]]            # list of strings
+            [status: "running"]              # a lone value
+            ["label=tier=worker"]            # as the docker CLI writes it
+            "status=running"                 # a lone filter
+
+        A shape that is none of these returns `{:error, error}` with code
+        `:bad_request` rather than raising.
     - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
@@ -158,16 +167,12 @@ defmodule Docker.Containers do
   """
   @spec list_containers(Docker.params(), Docker.options()) :: Docker.result(Docker.json_list())
   def list_containers(params \\ %{}, options \\ []) do
-    params =
-      case params[:filters] do
-        nil -> params
-        filters -> Map.put(params, :filters, Util.encode_filters(filters))
+    with {:ok, params} <- Util.encode_filters_param(params) do
+      if sandbox?(options) do
+        sandbox_list_containers_response(params, options)
+      else
+        do_list_containers(params, options)
       end
-
-    if sandbox?(options) do
-      sandbox_list_containers_response(params, options)
-    else
-      do_list_containers(params, options)
     end
   end
 

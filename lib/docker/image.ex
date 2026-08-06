@@ -77,10 +77,12 @@ defmodule Docker.Image do
       - `:manifests` — boolean, include manifest summaries.
       - `:identity` — boolean, include `Identity` per manifest. Requires
         `:manifests`.
-      - `:filters` — optional keyword list: `:before`, `:dangling`, `:label`,
-        `:reference`, `:since`, `:until`. `:label` takes a
-        `%{binary() => binary()}` map; every other filter takes a list of
-        strings.
+      - `:filters` — optional. Recognised names: `:before`, `:dangling`,
+        `:label`, `:reference`, `:since`, `:until`. Takes a label map
+        (`[label: %{"env" => "prod"}]`), a list of strings
+        (`[reference: ["alpine*"]]`), a lone value (`[dangling: "true"]`), or
+        the CLI's own form (`["label=env=prod"]`). Anything else returns
+        `{:error, error}` with code `:bad_request`.
     - `options` — optional keyword list. See `Docker`
       for the options table.
 
@@ -100,22 +102,14 @@ defmodule Docker.Image do
   """
   @spec list_images(Docker.params(), Docker.options()) :: Docker.result(Docker.json_list())
   def list_images(params \\ %{}, options \\ []) do
-    params =
-      params
-      |> encode_filters_param()
-      |> rename_shared_size_param()
+    with {:ok, params} <- Util.encode_filters_param(params) do
+      params = rename_shared_size_param(params)
 
-    if sandbox?(options) do
-      sandbox_list_images_response(params, options)
-    else
-      do_list_images(params, options)
-    end
-  end
-
-  defp encode_filters_param(params) do
-    case params[:filters] do
-      nil -> params
-      filters -> Map.put(params, :filters, Util.encode_filters(filters))
+      if sandbox?(options) do
+        sandbox_list_images_response(params, options)
+      else
+        do_list_images(params, options)
+      end
     end
   end
 

@@ -37,10 +37,12 @@ defmodule Docker.Network do
 
     - `params` — optional map. This endpoint takes no plain query parameters
       other than `:filters`.
-      - `:filters` — optional keyword list: `:dangling`, `:driver`, `:id`,
-        `:label`, `:name`, `:scope`, `:type`. `:label` takes a
-        `%{binary() => binary()}` map; every other filter takes a list of
-        strings.
+      - `:filters` — optional. Recognised names: `:dangling`, `:driver`,
+        `:id`, `:label`, `:name`, `:scope`, `:type`. Takes a label map
+        (`[label: %{"env" => "prod"}]`), a list of strings
+        (`[driver: ["bridge"]]`), a lone value (`[driver: "bridge"]`), or the
+        CLI's own form (`["driver=bridge"]`). Anything else returns
+        `{:error, error}` with code `:bad_request`.
     - `options` — optional keyword list. See `Docker` for the options table.
 
   ## Returns
@@ -59,16 +61,12 @@ defmodule Docker.Network do
   """
   @spec list_networks(Docker.params(), Docker.options()) :: Docker.result(Docker.json_list())
   def list_networks(params \\ %{}, options \\ []) do
-    params =
-      case params[:filters] do
-        nil -> params
-        filters -> Map.put(params, :filters, Util.encode_filters(filters))
+    with {:ok, params} <- Util.encode_filters_param(params) do
+      if sandbox?(options) do
+        sandbox_list_networks_response(params, options)
+      else
+        do_list_networks(params, options)
       end
-
-    if sandbox?(options) do
-      sandbox_list_networks_response(params, options)
-    else
-      do_list_networks(params, options)
     end
   end
 
