@@ -19,7 +19,10 @@ defmodule Docker.ClientTest do
 
   defp start_daemon(responder) do
     socket_path =
-      Path.join(System.tmp_dir!(), "docker-client-test-#{System.unique_integer([:positive])}.sock")
+      Path.join(
+        System.tmp_dir!(),
+        "docker-client-test-#{System.unique_integer([:positive])}.sock"
+      )
 
     {:ok, server} =
       FakeHttpServer.start(transport: :unix, socket_path: socket_path, responder: responder)
@@ -124,10 +127,13 @@ defmodule Docker.ClientTest do
 
   describe "request/4 against a daemon that is not there" do
     test "a missing socket becomes :service_unavailable" do
-      missing = Path.join(System.tmp_dir!(), "docker-absent-#{System.unique_integer([:positive])}")
+      missing =
+        Path.join(System.tmp_dir!(), "docker-absent-#{System.unique_integer([:positive])}")
+
       Application.put_env(:docker, :socket_path, missing)
 
-      assert {:error, %ErrorMessage{code: :service_unavailable} = error} = Client.request(:get, "/_ping")
+      assert {:error, %ErrorMessage{code: :service_unavailable} = error} =
+               Client.request(:get, "/_ping")
 
       assert error.message =~ "Could not reach the Docker daemon"
       assert %{socket_path: ^missing, method: :get, reason: _} = error.details
@@ -145,7 +151,9 @@ defmodule Docker.ClientTest do
     end
 
     test "a missing socket becomes :service_unavailable" do
-      missing = Path.join(System.tmp_dir!(), "docker-absent-#{System.unique_integer([:positive])}")
+      missing =
+        Path.join(System.tmp_dir!(), "docker-absent-#{System.unique_integer([:positive])}")
+
       Application.put_env(:docker, :socket_path, missing)
 
       assert {:error, %ErrorMessage{code: :service_unavailable}} =

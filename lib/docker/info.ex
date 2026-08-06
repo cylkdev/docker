@@ -72,7 +72,6 @@ defmodule Docker.Info do
     defdelegate sandbox_ping_response(options),
       to: Docker.Sandbox,
       as: :ping_response
-
   else
     defp sandbox_disabled?, do: true
 
