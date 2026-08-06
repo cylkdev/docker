@@ -25,7 +25,6 @@ defmodule Docker.Exec do
   """
 
   alias Docker.Client
-  alias Docker.Serializer
 
   @doc """
   Creates an exec instance in a running container but does not start it yet.
@@ -166,17 +165,18 @@ defmodule Docker.Exec do
 
   ## Returns
 
-    - `{:ok, map}` — a map with atom keys:
-      - `:exit_code` — integer exit code, or `nil` if not yet exited.
-      - `:running` — `true` if the exec process is still running.
+    - `{:ok, map}` — the daemon's response with its own string keys,
+      including:
+      - `"ExitCode"` — integer exit code, or `nil` if not yet exited.
+      - `"Running"` — `true` if the exec process is still running.
     - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
       such exec instance exists.
 
   ## Examples
 
       {:ok, info} = Docker.Exec.exec_inspect(exec_id)
-      info.exit_code  # 0 means success, anything else means failure
-      info.running    # false once the command has finished
+      info["ExitCode"]  # 0 means success, anything else means failure
+      info["Running"]   # false once the command has finished
   """
   @spec exec_inspect(Docker.exec_id(), Docker.options()) :: Docker.result(Docker.json_map())
   def exec_inspect(exec_id, options \\ []) do
@@ -191,7 +191,7 @@ defmodule Docker.Exec do
     url = "/exec/#{exec_id}/json"
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{body: body}} -> {:ok, Serializer.deserialize(body, options)}
+      {:ok, %{body: body}} -> {:ok, body}
       {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end
@@ -305,7 +305,7 @@ defmodule Docker.Exec do
   defp do_exec_run_with_status(container_ref, cmd, options) do
     with {:ok, exec_id} <- exec_create(container_ref, cmd, options),
          {:ok, output} <- exec_start(exec_id, options),
-         {:ok, %{exit_code: exit_code, running: running}} <- exec_inspect(exec_id, options) do
+         {:ok, %{"ExitCode" => exit_code, "Running" => running}} <- exec_inspect(exec_id, options) do
       {:ok, %{output: output, exit_code: exit_code, running: running}}
     end
   end

@@ -24,7 +24,6 @@ defmodule Docker.Image do
 
   alias Docker.Client
   alias Docker.Util
-  alias Docker.Serializer
 
   @build_image_query_keys [
     :dockerfile,
@@ -179,7 +178,7 @@ defmodule Docker.Image do
     url = "/images/#{image_ref}/json"
 
     case Client.request(:get, url, nil, options) do
-      {:ok, %{body: body}} -> {:ok, Serializer.deserialize(body, options)}
+      {:ok, %{body: body}} -> {:ok, body}
       {:error, %ErrorMessage{} = error} -> {:error, error}
     end
   end

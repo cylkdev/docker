@@ -1,5 +1,18 @@
 # Hand-written response shapes — design
 
+> **Superseded, not implemented.** `Docker.Serializer` and `Docker.Casing` were
+> deleted and the two deserializing call sites now return the daemon's body
+> untouched. That satisfies the invariant below — no `String.to_atom/1` in
+> `lib/`, so no response can mint an atom — without writing any shapes, and it
+> makes all ~20 body-returning functions agree on string keys. Callers index
+> with `body["Config"]["Labels"]`.
+>
+> The rest of this document is kept because the reasoning still holds: the
+> measurements, the invariant, the dictionary-region survey, and the rules for
+> transliterating a shape. If per-endpoint shapes are ever wanted for
+> ergonomics, they can be layered on top of raw bodies one function at a time —
+> and the "Rules for writing a shape" section is how to write them.
+
 `Docker.Serializer` goes away. Every function that returns a daemon response
 maps it by hand, so the shape a caller gets is written in the function that
 returns it.
