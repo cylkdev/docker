@@ -37,6 +37,20 @@ defmodule Docker.ClientTest do
     end
   end
 
+  describe "a status the daemon sends on a streaming call" do
+    # stream/4 gets an async body it must drain before it can report the
+    # error. Every streaming call — pull, build, following logs, attach —
+    # reports its failures through this path.
+    test "a non-2xx from a streaming call lifts the drained body's message" do
+      assert {:error, %ErrorMessage{code: :not_found} = error} =
+               Docker.pull_image("docker-ex-review-absent-xyz/nope:latest")
+
+      assert error.message =~ "pull access denied for docker-ex-review-absent-xyz/nope"
+      assert %{status: 404, method: :post, path: path} = error.details
+      assert path =~ "/images/create?fromImage=docker-ex-review-absent-xyz"
+    end
+  end
+
   describe "a daemon that is not there" do
     setup do
       original = Application.fetch_env!(:docker, :socket_path)

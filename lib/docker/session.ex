@@ -70,16 +70,6 @@ defmodule Docker.Session do
           {:ok, %{"Config" => %{"Tty" => tty}}} when is_boolean(tty) ->
             {:ok, tty}
 
-          # Every container the daemon knows about reports Config.Tty, so a
-          # response without it is a shape this client does not understand
-          # rather than a container without a PTY.
-          {:ok, body} ->
-            {:error,
-             ErrorMessage.internal_server_error(
-               "The Docker daemon returned a container with no Config.Tty",
-               %{container_ref: container_ref, body: body}
-             )}
-
           {:error, %ErrorMessage{} = error} ->
             {:error, error}
         end

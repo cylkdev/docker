@@ -15,8 +15,6 @@ defmodule DaemonCase do
       use ExUnit.Case, async: false
 
       import DaemonCase
-
-      @image "alpine:3.19"
     end
   end
 

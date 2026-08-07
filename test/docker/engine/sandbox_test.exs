@@ -1,4 +1,11 @@
 defmodule Docker.SandboxTest do
+  @moduledoc """
+  The sandbox is product surface: downstream users register canned responses
+  and then call the public `Docker.*` functions with `sandbox: [enabled: true]`.
+  These tests drive it the same way, so the dispatch each `Docker.*` function
+  performs is exercised rather than bypassed.
+  """
+
   use ExUnit.Case, async: true
 
   alias Docker.Sandbox
@@ -8,25 +15,26 @@ defmodule Docker.SandboxTest do
   # ---------------------------------------------------------------------------
 
   describe "happy path" do
-    test "ping_response/1 returns the registered response (\"*\"-keyed)" do
+    test "Docker.ping/1 returns the registered response (\"*\"-keyed)" do
       Sandbox.set_ping_responses([fn -> {:ok, "OK"} end])
-      assert {:ok, "OK"} = Sandbox.ping_response([])
+      assert {:ok, "OK"} = Docker.ping(sandbox: [enabled: true])
     end
 
-    test "list_containers_response/2 returns the registered response (\"*\"-keyed)" do
+    test "Docker.list_containers/2 returns the registered response (\"*\"-keyed)" do
       Sandbox.set_list_containers_responses([fn -> {:ok, [%{"Id" => "abc"}]} end])
-      assert {:ok, [%{"Id" => "abc"}]} = Sandbox.list_containers_response(%{}, [])
+      assert {:ok, [%{"Id" => "abc"}]} = Docker.list_containers(%{}, sandbox: [enabled: true])
     end
 
-    test "find_container_response/2 returns the registered response (ref-keyed)" do
+    test "Docker.find_container/2 returns the registered response (ref-keyed)" do
       Sandbox.set_find_container_responses([
         {"abc123", fn -> {:ok, %{"Id" => "abc123"}} end}
       ])
 
-      assert {:ok, %{"Id" => "abc123"}} = Sandbox.find_container_response("abc123", [])
+      assert {:ok, %{"Id" => "abc123"}} =
+               Docker.find_container("abc123", sandbox: [enabled: true])
     end
 
-    test "pull_image_response/3 dispatches to the registered function with all args" do
+    test "Docker.pull_image/3 dispatches to the registered function with all args" do
       Sandbox.set_pull_image_responses([
         {"alpine:latest",
          fn image, params, options ->
@@ -34,11 +42,18 @@ defmodule Docker.SandboxTest do
          end}
       ])
 
-      assert {:ok, {"alpine:latest", %{"foo" => "bar"}, [timeout: 5_000]}} =
-               Sandbox.pull_image_response("alpine:latest", %{"foo" => "bar"}, timeout: 5_000)
+      assert {:ok, {"alpine:latest", %{"foo" => "bar"}, options}} =
+               Docker.pull_image(
+                 "alpine:latest",
+                 %{"foo" => "bar"},
+                 timeout: 5_000,
+                 sandbox: [enabled: true]
+               )
+
+      assert options[:timeout] === 5_000
     end
 
-    test "build_image_response/5 (high arity) dispatches with all 5 args" do
+    test "Docker.build_image/5 (high arity) dispatches with all 5 args" do
       Sandbox.set_build_image_responses([
         {"my-app:1.0",
          fn ctx, dockerfile, tag, params, options ->
@@ -46,8 +61,17 @@ defmodule Docker.SandboxTest do
          end}
       ])
 
-      assert {:ok, {"./ctx", "Dockerfile", "my-app:1.0", %{}, [foo: :bar]}} =
-               Sandbox.build_image_response("./ctx", "Dockerfile", "my-app:1.0", %{}, foo: :bar)
+      assert {:ok, {"./ctx", "Dockerfile", "my-app:1.0", %{}, options}} =
+               Docker.build_image(
+                 "./ctx",
+                 "Dockerfile",
+                 "my-app:1.0",
+                 %{},
+                 foo: :bar,
+                 sandbox: [enabled: true]
+               )
+
+      assert options[:foo] === :bar
     end
   end
 
@@ -56,31 +80,31 @@ defmodule Docker.SandboxTest do
   # ---------------------------------------------------------------------------
 
   describe "regex-keyed registration" do
-    test "find_image_response matches a regex against the image ref" do
+    test "find_image matches a regex against the image ref" do
       Sandbox.set_find_image_responses([
         {~r/^alpine.*/, fn _ref -> {:ok, %{"Id" => "sha256:alpine"}} end}
       ])
 
       assert {:ok, %{"Id" => "sha256:alpine"}} =
-               Sandbox.find_image_response("alpine:3.18", [])
+               Docker.find_image("alpine:3.18", sandbox: [enabled: true])
     end
 
-    test "find_container_response matches a regex against the container ref" do
+    test "find_container matches a regex against the container ref" do
       Sandbox.set_find_container_responses([
         {~r/^web-/, fn _ref -> {:ok, %{"Id" => "matched"}} end}
       ])
 
       assert {:ok, %{"Id" => "matched"}} =
-               Sandbox.find_container_response("web-server-1", [])
+               Docker.find_container("web-server-1", sandbox: [enabled: true])
     end
 
-    test "pull_image_response matches a regex against the image string" do
+    test "pull_image matches a regex against the image string" do
       Sandbox.set_pull_image_responses([
         {~r/^docker\.io\//, fn _img, _params, _opts -> {:ok, :pulled} end}
       ])
 
       assert {:ok, :pulled} =
-               Sandbox.pull_image_response("docker.io/library/nginx", %{}, [])
+               Docker.pull_image("docker.io/library/nginx", %{}, sandbox: [enabled: true])
     end
   end
 
@@ -89,28 +113,28 @@ defmodule Docker.SandboxTest do
   # ---------------------------------------------------------------------------
 
   describe "error responses" do
-    test "ping_response surfaces a registered {:error, _} verbatim" do
+    test "ping surfaces a registered {:error, _} verbatim" do
       error = ErrorMessage.service_unavailable("daemon down", %{reason: :econnrefused})
       Sandbox.set_ping_responses([fn -> {:error, error} end])
-      assert {:error, ^error} = Sandbox.ping_response([])
+      assert {:error, ^error} = Docker.ping(sandbox: [enabled: true])
     end
 
-    test "find_image_response surfaces a registered {:error, :not_found}" do
+    test "find_image surfaces a registered {:error, :not_found}" do
       Sandbox.set_find_image_responses([
         {"missing", fn _ref -> {:error, ErrorMessage.not_found("no such image")} end}
       ])
 
       assert {:error, %ErrorMessage{code: :not_found}} =
-               Sandbox.find_image_response("missing", [])
+               Docker.find_image("missing", sandbox: [enabled: true])
     end
 
-    test "list_networks_response surfaces a registered {:error, _} verbatim" do
+    test "list_networks surfaces a registered {:error, _} verbatim" do
       Sandbox.set_list_networks_responses([
         fn -> {:error, ErrorMessage.gateway_timeout("timed out")} end
       ])
 
       assert {:error, %ErrorMessage{code: :gateway_timeout}} =
-               Sandbox.list_networks_response(%{}, [])
+               Docker.list_networks(%{}, sandbox: [enabled: true])
     end
   end
 
@@ -123,7 +147,7 @@ defmodule Docker.SandboxTest do
       Sandbox.set_ping_responses([fn _a, _b -> :nope end])
 
       assert_raise RuntimeError, ~r/signature is not supported/, fn ->
-        Sandbox.ping_response([])
+        Docker.ping(sandbox: [enabled: true])
       end
     end
 
@@ -133,13 +157,16 @@ defmodule Docker.SandboxTest do
       ])
 
       assert_raise RuntimeError, ~r/signature is not supported/, fn ->
-        Sandbox.find_image_response("any", [])
+        Docker.find_image("any", sandbox: [enabled: true])
       end
     end
   end
 
   # ---------------------------------------------------------------------------
   # sandbox_disabled?/0 predicate
+  #
+  # No `Docker.*` function exposes this — it is the opt-out hook the sandbox
+  # consults internally — so it is called directly.
   # ---------------------------------------------------------------------------
 
   describe "sandbox_disabled?/0" do
@@ -155,7 +182,7 @@ defmodule Docker.SandboxTest do
   describe "helpful errors" do
     test "calling a response without registering raises with setup hints" do
       assert_raise RuntimeError, ~r/No functions have been registered/, fn ->
-        Sandbox.ping_response([])
+        Docker.ping(sandbox: [enabled: true])
       end
     end
 
@@ -165,7 +192,7 @@ defmodule Docker.SandboxTest do
       ])
 
       assert_raise RuntimeError, ~r/Function not found/, fn ->
-        Sandbox.find_image_response("b", [])
+        Docker.find_image("b", sandbox: [enabled: true])
       end
     end
   end

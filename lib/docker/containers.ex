@@ -719,8 +719,9 @@ defmodule Docker.Containers do
     - `{:ok, stat}` — a map with the daemon's keys: `"name"`, `"size"`,
       `"mode"`, `"mtime"`, and `"linkTarget"`.
     - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when the
-      container or path does not exist; `:internal_server_error` when the
-      daemon's stat header is missing or cannot be decoded.
+      container or path does not exist. A stat header the daemon could not
+      have sent — missing, not base64, or not a JSON object — raises rather
+      than returning an error.
 
   ## Examples
 
@@ -742,7 +743,7 @@ defmodule Docker.Containers do
     url = archive_url(container_ref, src_path)
 
     with {:ok, %{headers: headers}} <- Client.request(:head, url, nil, options) do
-      decode_path_stat(headers, container_ref, src_path)
+      decode_path_stat(headers)
     end
   end
 
@@ -750,11 +751,12 @@ defmodule Docker.Containers do
 
   # The daemon sends this header as base64-encoded JSON on every 2xx. A
   # response that is not that shape is a broken daemon, not a case to handle.
-  defp decode_path_stat(headers, _container_ref, _src_path) do
+  defp decode_path_stat(headers) do
     {_key, encoded} = List.keyfind(headers, @stat_header, 0)
     {:ok, json} = Base.decode64(encoded)
+    {:ok, %{} = stat} = JSON.decode(json)
 
-    JSON.decode(json)
+    {:ok, stat}
   end
 
   defp archive_url(container_ref, src_path) do
