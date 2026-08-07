@@ -158,4 +158,57 @@ which is accurate.
    `containers_test.exs` against the daemon.
 4. Rewrite `docker_test.exs` against the daemon, one `describe` block at a
    time.
+
+## Post-sweep coverage
+
+Captured from `mix coveralls` after the sweep (140 tests, 3 doctests, 0
+failures):
+
+```
+COV    FILE                                                                           LINES RELEVANT   MISSED
+100.0% lib/docker.ex                                                                    369        0        0
+100.0% lib/docker/application.ex                                                         14        2        0
+ 62.3% lib/docker/client.ex                                                             435      101       38
+ 75.0% lib/docker/config.ex                                                              34        4        1
+ 75.6% lib/docker/containers.ex                                                        1068      119       29
+ 73.0% lib/docker/exec.ex                                                               424       52       14
+100.0% lib/docker/frame.ex                                                              352       17        0
+ 62.8% lib/docker/image.ex                                                              741       97       36
+ 88.8% lib/docker/info.ex                                                                86        9        1
+ 85.1% lib/docker/instance.ex                                                           164       27        4
+100.0% lib/docker/log.ex                                                                 84       16        0
+100.0% lib/docker/ndjson.ex                                                              74        7        0
+ 74.0% lib/docker/network.ex                                                            407       50       13
+ 24.2% lib/docker/sandbox.ex                                                           1092      305      231
+ 22.2% lib/docker/session.ex                                                              88       18       14
+  0.0% lib/docker/stream_error.ex                                                        44        4        4
+ 35.0% lib/docker/streaming.ex                                                          125       20       13
+ 75.0% lib/docker/streaming/session.ex                                                  286       60       15
+100.0% lib/docker/streaming/session_handler.ex                                           78       10        0
+ 72.0% lib/docker/terminal.ex                                                           312       50       14
+ 85.3% lib/docker/util.ex                                                               201       41        6
+100.0% test/support/daemon_case.ex                                                       57       10        0
+[TOTAL]  57.5%
+```
+
+The TOTAL fell 61.0% → 57.5%, but that fall is dominated by one file:
+`lib/docker/sandbox.ex` (1092 lines, 305 relevant) dropped 61.3% → 24.2%. The
+sandbox used to be exercised as a stand-in by 136 tests that stubbed the
+daemon through it; now it is exercised only by its own thin feature suite.
+That is the intended outcome of shrinking the sandbox's role, not a
+regression.
+
+Set that one file aside and the picture reverses: the endpoint modules a
+caller actually reaches climbed sharply — `network.ex` 27.4% → 74.0%,
+`exec.ex` 45.2% → 73.0%, `containers.ex` 64.6% → 75.6%, `info.ex` 55.5% →
+88.8%. These are now driven end to end against a real daemon instead of
+through canned sandbox responses.
+
+`lib/docker/client.ex` fell, 71.9% → 62.3% (missed lines 30 → 38). This one
+is worth stating plainly: the deleted `FakeHttpServer` could manufacture
+error responses a real docker daemon will not send, so some surviving error
+paths — the transport-failure clauses and the `Docker.StreamError` raises —
+are no longer exercised by anything. `lib/docker/stream_error.ex` remains at
+0.0% for the same reason. This is a real, accepted trade of synthetic
+coverage for honest coverage, not an oversight.
 5. Reduce `sandbox_test.exs` to the sandbox-as-feature suite.
