@@ -384,20 +384,8 @@ defmodule Docker.Client do
        Exception.message(exception)}
   end
 
-  # `ErrorMessage.http_code_reason_atom/1` delegates to `Plug.Conn.Status`,
-  # which raises for codes outside its table and answers 2xx codes with names
-  # ErrorMessage has no constructor for. Neither may escape the error path.
   @spec status_code(integer()) :: ErrorMessage.code()
-  defp status_code(status) do
-    atom = ErrorMessage.http_code_reason_atom(status)
-
-    if function_exported?(ErrorMessage, atom, 2), do: atom, else: fallback_code(status)
-  rescue
-    ArgumentError -> fallback_code(status)
-  end
-
-  defp fallback_code(status) when status in 300..499, do: :bad_request
-  defp fallback_code(_status), do: :internal_server_error
+  defp status_code(status), do: ErrorMessage.http_code_reason_atom(status)
 
   # The Engine API puts its human-readable text at `body["message"]`.
   defp daemon_message(%{"message" => message}, status) when is_binary(message) do
@@ -413,11 +401,9 @@ defmodule Docker.Client do
         presence(message) || generic_message(status)
 
       _not_a_daemon_error_body ->
-        presence(body) || generic_message(status)
+        generic_message(status)
     end
   end
-
-  defp daemon_message(_body, status), do: generic_message(status)
 
   defp presence(string) do
     case String.trim(string) do
