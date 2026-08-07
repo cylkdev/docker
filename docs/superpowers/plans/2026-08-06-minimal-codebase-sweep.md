@@ -972,8 +972,10 @@ defmodule Docker.ImagesTest do
   end
 
   describe "materialize_image/4" do
+    # No default arguments: all four are required.
     test "an image already present is returned without pulling" do
-      assert {:ok, _} = Docker.materialize_image("alpine:3.19")
+      assert {:ok, image} = Docker.materialize_image("alpine:3.19", "alpine:3.19", %{}, [])
+      assert image["Id"] =~ "sha256:"
     end
   end
 
@@ -1046,9 +1048,10 @@ defmodule Docker.NetworksTest do
 
   use DaemonCase
 
+  # create_network/3 requires labels; there is no arity-1 form.
   defp create_network! do
     name = unique_name("docker-ex-test-net")
-    {:ok, id} = Docker.create_network(name)
+    {:ok, id} = Docker.create_network(name, %{})
     on_exit(fn -> Docker.delete_network(id) end)
     {id, name}
   end
