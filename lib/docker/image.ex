@@ -522,13 +522,14 @@ defmodule Docker.Image do
     end
   end
 
+  # A relative Dockerfile is relative to the build context, which is the only
+  # place the daemon can read it from. Resolving it against the current
+  # directory instead would make a build depend on where it was started, and
+  # would name a file outside the context whenever the two differ.
   defp expand_dockerfile(dockerfile, context_path) do
-    expanded = Path.expand(dockerfile)
-
-    cond do
-      Path.type(dockerfile) === :absolute -> dockerfile
-      File.exists?(expanded) -> expanded
-      true -> Path.expand(dockerfile, context_path)
+    case Path.type(dockerfile) do
+      :absolute -> dockerfile
+      _relative -> Path.expand(dockerfile, context_path)
     end
   end
 

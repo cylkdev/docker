@@ -30,6 +30,32 @@ defmodule Docker.BuildTest do
       assert {:error, %ErrorMessage{code: :bad_request}} =
                Docker.build_image("/no/such/context", "Dockerfile", unique_tag())
     end
+
+    # "test/fixtures/Dockerfile" also names a real file relative to the
+    # directory the suite runs in. The one inside the context is the one that
+    # must be built, whatever the current directory holds.
+    test "a relative Dockerfile is read from the context, not the current directory" do
+      context =
+        Path.join(
+          System.tmp_dir!(),
+          "docker-ex-test-context-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(Path.join(context, "test/fixtures"))
+      File.cp!(Path.join(@context, "Dockerfile"), Path.join(context, "test/fixtures/Dockerfile"))
+      on_exit(fn -> File.rm_rf!(context) end)
+
+      tag = unique_tag()
+      on_exit(fn -> Docker.delete_image(tag, %{force: true}) end)
+
+      assert {:ok, stream} = Docker.build_image(context, "test/fixtures/Dockerfile", tag)
+
+      events = Enum.to_list(stream)
+      assert Enum.any?(events, &Map.has_key?(&1, "stream"))
+
+      assert {:ok, image} = Docker.find_image(tag)
+      assert tag in image["RepoTags"]
+    end
   end
 
   describe "run_build_image/5" do

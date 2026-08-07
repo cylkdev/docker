@@ -3,7 +3,7 @@ defmodule Docker.TerminalTest do
 
   alias Docker.Terminal
 
-  @dockerfile "examples/terminal-example/Dockerfile"
+  @dockerfile "Dockerfile"
   @context_path "examples/terminal-example"
 
   setup_all do
