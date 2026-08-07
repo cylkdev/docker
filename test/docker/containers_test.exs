@@ -1,180 +1,85 @@
 defmodule Docker.ContainersTest do
   @moduledoc """
-  Exercises the archive and wait endpoints against a real socket, covering the
-  request-building and response-decoding that sandbox mode bypasses.
+  Archive and wait endpoints against a real daemon.
+
+  The malformed-header cases this suite used to carry are gone with the
+  branches that handled them: the daemon always sends a valid base64 JSON
+  stat header.
   """
 
-  # Not `async: true`: these tests redirect `Docker.Config.socket_path/0`,
-  # which is global application config.
-  use ExUnit.Case
-
-  alias Docker.Containers
-
-  setup do
-    original = Application.fetch_env!(:docker, :socket_path)
-    on_exit(fn -> Application.put_env(:docker, :socket_path, original) end)
-    :ok
-  end
-
-  defp start_daemon(responder) do
-    socket_path =
-      Path.join(
-        System.tmp_dir!(),
-        "docker-containers-test-#{System.unique_integer([:positive])}.sock"
-      )
-
-    {:ok, server} =
-      FakeHttpServer.start(transport: :unix, socket_path: socket_path, responder: responder)
-
-    Application.put_env(:docker, :socket_path, socket_path)
-
-    on_exit(fn ->
-      FakeHttpServer.stop(server)
-      File.rm(socket_path)
-    end)
-
-    :ok
-  end
-
-  # Captures the request line so a test can assert on the URL that was built.
-  defp echoing_daemon(response_fun) do
-    test_pid = self()
-
-    fn request ->
-      send(test_pid, {:request, request.method, request.path})
-      response_fun.(request)
-    end
-  end
-
-  defp tar_response(body) do
-    fn _request ->
-      "HTTP/1.1 200 OK\r\n" <>
-        "Content-Type: application/x-tar\r\n" <>
-        "Content-Length: #{byte_size(body)}\r\n\r\n" <> body
-    end
-  end
-
-  defp stat_response(header_value) do
-    fn _request ->
-      "HTTP/1.1 200 OK\r\n" <>
-        "X-Docker-Container-Path-Stat: #{header_value}\r\n" <>
-        "Content-Length: 0\r\n\r\n"
-    end
-  end
-
-  defp wait_response(body) do
-    fn _request ->
-      "HTTP/1.1 200 OK\r\n" <>
-        "Content-Type: application/json\r\n" <>
-        "Content-Length: #{byte_size(body)}\r\n\r\n" <> body
-    end
-  end
+  use DaemonCase
 
   describe "get_archive/3" do
-    test "returns the tar body undecoded and sends the path as a query param" do
-      start_daemon(echoing_daemon(tar_response("tar-bytes")))
+    test "returns the tar bytes for a path in the container" do
+      id = start_container!(["sleep", "30"])
 
-      assert {:ok, "tar-bytes"} = Containers.get_archive("c1", "/app/build")
-
-      assert_receive {:request, "GET", path}
-      assert path =~ "/containers/c1/archive"
-      assert path =~ "path=%2Fapp%2Fbuild"
+      assert {:ok, tar} = Docker.get_archive(id, "/etc/hostname")
+      assert is_binary(tar)
+      # A tar member header carries the file name in its first 100 bytes.
+      assert binary_part(tar, 0, 100) =~ "hostname"
     end
 
-    test "a 404 becomes :not_found" do
-      start_daemon(fn _request ->
-        body = ~s({"message":"Could not find the file /nope in container c1"})
+    test "a path that does not exist is :not_found" do
+      id = start_container!(["sleep", "30"])
 
-        "HTTP/1.1 404 Not Found\r\n" <>
-          "Content-Type: application/json\r\n" <>
-          "Content-Length: #{byte_size(body)}\r\n\r\n" <> body
-      end)
-
-      assert {:error, %ErrorMessage{code: :not_found} = error} =
-               Containers.get_archive("c1", "/nope")
-
-      assert error.message === "Could not find the file /nope in container c1"
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Docker.get_archive(id, "/no/such/path")
     end
   end
 
   describe "stat_archive/3" do
-    test "decodes the base64 JSON stat header" do
-      stat = %{"name" => "build", "size" => 4096, "mode" => 493, "linkTarget" => ""}
-      start_daemon(echoing_daemon(stat_response(Base.encode64(JSON.encode!(stat)))))
+    test "returns the daemon's decoded path stat" do
+      id = start_container!(["sleep", "30"])
 
-      assert {:ok, ^stat} = Containers.stat_archive("c1", "/app/build")
-      assert_receive {:request, "HEAD", _path}
+      assert {:ok, stat} = Docker.stat_archive(id, "/etc/hostname")
+      assert stat["name"] === "hostname"
+      assert is_integer(stat["size"])
     end
 
-    test "a missing stat header is :internal_server_error" do
-      start_daemon(fn _request -> "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n" end)
+    test "a path that does not exist is :not_found" do
+      id = start_container!(["sleep", "30"])
 
-      assert {:error, %ErrorMessage{code: :internal_server_error} = error} =
-               Containers.stat_archive("c1", "/app/build")
-
-      assert error.details.reason === :missing_header
-    end
-
-    test "an undecodable base64 header is :internal_server_error" do
-      start_daemon(stat_response("not!valid!base64"))
-
-      assert {:error, %ErrorMessage{code: :internal_server_error} = error} =
-               Containers.stat_archive("c1", "/app/build")
-
-      assert error.details.reason === :invalid_base64
-    end
-
-    test "a header that is valid base64 but not JSON is :internal_server_error" do
-      start_daemon(stat_response(Base.encode64("this is not json")))
-
-      assert {:error, %ErrorMessage{code: :internal_server_error} = error} =
-               Containers.stat_archive("c1", "/app/build")
-
-      assert error.details.reason === :invalid_json
-    end
-
-    test "a header encoding a JSON non-object is :internal_server_error" do
-      start_daemon(stat_response(Base.encode64(~s(["not","an","object"]))))
-
-      assert {:error, %ErrorMessage{code: :internal_server_error} = error} =
-               Containers.stat_archive("c1", "/app/build")
-
-      assert error.details.reason === :not_an_object
+      assert {:error, %ErrorMessage{code: :not_found}} =
+               Docker.stat_archive(id, "/no/such/path")
     end
   end
 
   describe "wait_container/3" do
-    test "returns the decoded exit status" do
-      start_daemon(echoing_daemon(wait_response(~s({"StatusCode":0,"Error":null}))))
+    test "returns the exit status once the container stops" do
+      id = start_container!(["/bin/sh", "-c", "exit 0"])
 
-      assert {:ok, %{"StatusCode" => 0, "Error" => nil}} = Containers.wait_container("c1")
-
-      assert_receive {:request, "POST", path}
-      assert path =~ "/containers/c1/wait"
+      assert {:ok, %{"StatusCode" => 0}} = Docker.wait_container(id)
     end
 
-    test "a non-zero exit code is still {:ok, _}" do
-      start_daemon(wait_response(~s({"StatusCode":137,"Error":null})))
+    test "a non-zero exit is still a successful call" do
+      id = start_container!(["/bin/sh", "-c", "exit 7"])
 
-      assert {:ok, %{"StatusCode" => 137}} = Containers.wait_container("c1")
+      assert {:ok, %{"StatusCode" => 7}} = Docker.wait_container(id)
     end
 
-    test "puts the condition in the query string" do
-      start_daemon(echoing_daemon(wait_response(~s({"StatusCode":0}))))
-
-      assert {:ok, _} = Containers.wait_container("c1", %{condition: "next-exit"})
-
-      assert_receive {:request, "POST", path}
-      assert path =~ "condition=next-exit"
-    end
-
-    test "an explicit :receive_timeout wins over the infinite default" do
-      # Holds the connection open without answering, the way the real daemon
-      # does while a container is still running.
-      start_daemon(fn _request -> {:script, [{:sleep, 5_000}, :close]} end)
+    test "an elapsed :receive_timeout is :gateway_timeout" do
+      id = start_container!(["sleep", "30"])
 
       assert {:error, %ErrorMessage{code: :gateway_timeout}} =
-               Containers.wait_container("c1", %{}, receive_timeout: 100)
+               Docker.wait_container(id, %{}, receive_timeout: 100)
+    end
+  end
+
+  describe "put_archive/4" do
+    test "a tar written into the container is readable back out" do
+      id = start_container!(["sleep", "30"])
+      tar_path = Path.join(System.tmp_dir!(), unique_name("put-archive") <> ".tar")
+      on_exit(fn -> File.rm(tar_path) end)
+
+      source = Path.join(System.tmp_dir!(), unique_name("payload"))
+      File.write!(source, "hello from the test")
+      on_exit(fn -> File.rm(source) end)
+
+      :ok = Docker.Util.create_tar(tar_path, source, verbose: false)
+
+      assert {:ok, _} = Docker.put_archive(id, "/tmp", tar_path)
+      assert {:ok, tar} = Docker.get_archive(id, "/tmp/#{Path.basename(source)}")
+      assert tar =~ "hello from the test"
     end
   end
 end

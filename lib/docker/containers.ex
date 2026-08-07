@@ -422,14 +422,6 @@ defmodule Docker.Containers do
      )}
   end
 
-  defp interpret_create_response(body, name) do
-    {:error,
-     ErrorMessage.internal_server_error(
-       "The Docker daemon returned an unrecognised create response",
-       %{body: body, name: name}
-     )}
-  end
-
   @doc """
   Starts a previously created container.
 
@@ -756,43 +748,13 @@ defmodule Docker.Containers do
 
   @stat_header "x-docker-container-path-stat"
 
-  defp decode_path_stat(headers, container_ref, src_path) do
-    with {:ok, encoded} <- fetch_stat_header(headers, container_ref, src_path),
-         {:ok, json} <- decode_stat_base64(encoded, container_ref, src_path),
-         {:ok, stat} when is_map(stat) <- decode_stat_json(json, container_ref, src_path) do
-      {:ok, stat}
-    else
-      {:ok, _not_a_map} -> {:error, stat_error(container_ref, src_path, :not_an_object)}
-      {:error, %ErrorMessage{} = error} -> {:error, error}
-    end
-  end
+  # The daemon sends this header as base64-encoded JSON on every 2xx. A
+  # response that is not that shape is a broken daemon, not a case to handle.
+  defp decode_path_stat(headers, _container_ref, _src_path) do
+    {_key, encoded} = List.keyfind(headers, @stat_header, 0)
+    {:ok, json} = Base.decode64(encoded)
 
-  defp fetch_stat_header(headers, container_ref, src_path) do
-    case List.keyfind(headers, @stat_header, 0) do
-      {_key, value} when is_binary(value) -> {:ok, value}
-      _ -> {:error, stat_error(container_ref, src_path, :missing_header)}
-    end
-  end
-
-  defp decode_stat_base64(encoded, container_ref, src_path) do
-    case Base.decode64(encoded) do
-      {:ok, json} -> {:ok, json}
-      :error -> {:error, stat_error(container_ref, src_path, :invalid_base64)}
-    end
-  end
-
-  defp decode_stat_json(json, container_ref, src_path) do
-    case JSON.decode(json) do
-      {:ok, decoded} -> {:ok, decoded}
-      {:error, _reason} -> {:error, stat_error(container_ref, src_path, :invalid_json)}
-    end
-  end
-
-  defp stat_error(container_ref, src_path, reason) do
-    ErrorMessage.internal_server_error(
-      "Could not decode the path stat the Docker daemon returned for #{src_path}",
-      %{container_ref: container_ref, src_path: src_path, reason: reason}
-    )
+    JSON.decode(json)
   end
 
   defp archive_url(container_ref, src_path) do
