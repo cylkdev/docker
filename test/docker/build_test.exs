@@ -47,6 +47,7 @@ defmodule Docker.BuildTest do
     test "a deleted image is no longer findable" do
       tag = unique_tag()
       :ok = Docker.run_build_image(@context, "Dockerfile", tag)
+      on_exit(fn -> Docker.delete_image(tag, %{force: true}) end)
 
       assert {:ok, _} = Docker.delete_image(tag, %{force: true})
       assert {:error, %ErrorMessage{code: :not_found}} = Docker.find_image(tag)

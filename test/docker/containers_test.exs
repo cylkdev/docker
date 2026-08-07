@@ -82,4 +82,20 @@ defmodule Docker.ContainersTest do
       assert tar =~ "hello from the test"
     end
   end
+
+  describe "download_archive/4" do
+    test "writes the tar bytes to a destination path on disk" do
+      id = start_container!(["sleep", "30"])
+
+      dest = Path.join(System.tmp_dir!(), unique_name("download-archive") <> ".tar")
+      on_exit(fn -> File.rm(dest) end)
+
+      assert {:ok, ^dest} = Docker.download_archive(id, "/etc/hostname", dest)
+      assert File.exists?(dest)
+
+      tar = File.read!(dest)
+      # A tar member header carries the file name in its first 100 bytes.
+      assert binary_part(tar, 0, 100) =~ "hostname"
+    end
+  end
 end
