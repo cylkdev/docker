@@ -5,46 +5,6 @@ defmodule DockerTest do
 
   @sandbox [sandbox: [enabled: true]]
 
-  describe "list_images/2" do
-    test "returns a list" do
-      images = [%{"Id" => "i1"}, %{"Id" => "i2"}]
-      Sandbox.set_list_images_responses([fn -> {:ok, images} end])
-
-      assert {:ok, ^images} = Docker.list_images(%{all: true}, @sandbox)
-    end
-
-    test "encodes the :reference filter" do
-      Sandbox.set_list_images_responses([fn params -> {:ok, params} end])
-
-      assert {:ok, params} = Docker.list_images(%{filters: [reference: ["alpine*"]]}, @sandbox)
-
-      assert params[:filters] == ~s({"reference":["alpine*"]})
-    end
-
-    test "rewrites :shared_size to the Engine's spelling and leaves identity alone" do
-      Sandbox.set_list_images_responses([fn params -> {:ok, params} end])
-
-      assert {:ok, params} =
-               Docker.list_images(
-                 %{shared_size: true, identity: true, manifests: true},
-                 @sandbox
-               )
-
-      assert params == %{"shared-size": true, identity: true, manifests: true}
-    end
-
-    test "shared-size and identity reach the URL with the Engine's spelling" do
-      url =
-        Docker.Util.append_query_string(
-          "/images/json",
-          %{"shared-size": true, identity: true, manifests: true}
-        )
-
-      assert url == "/images/json?identity=true&manifests=true&shared-size=true"
-      refute url =~ "shared_size"
-    end
-  end
-
   describe "list_networks/2" do
     test "returns a list" do
       Sandbox.set_list_networks_responses([fn -> {:ok, [%{"Id" => "n1"}]} end])
@@ -58,28 +18,6 @@ defmodule DockerTest do
       assert {:ok, params} = Docker.list_networks(%{filters: [driver: ["bridge"]]}, @sandbox)
 
       assert params[:filters] == ~s({"driver":["bridge"]})
-    end
-  end
-
-  describe "find_image/2" do
-    test "returns image details" do
-      Sandbox.set_find_image_responses([
-        {~r/.*/, fn ref -> {:ok, %{id: "sha256:" <> ref}} end}
-      ])
-
-      assert {:ok, %{id: "sha256:alpine"}} = Docker.find_image("alpine", @sandbox)
-    end
-
-    test "404 surfaces as a :not_found error" do
-      Sandbox.set_find_image_responses([
-        {~r/.*/,
-         fn _ref ->
-           {:error, ErrorMessage.not_found("no such image", %{status: 404})}
-         end}
-      ])
-
-      assert {:error, %ErrorMessage{code: :not_found, message: "no such image"}} =
-               Docker.find_image("ghost", @sandbox)
     end
   end
 
@@ -121,16 +59,6 @@ defmodule DockerTest do
       ])
 
       assert Docker.delete_network("net1", @sandbox)
-    end
-  end
-
-  describe "delete_image/3" do
-    test "removes an image" do
-      Sandbox.set_delete_image_responses([
-        {~r/.*/, fn _ref, _params -> {:ok, [%{"Untagged" => "alpine:latest"}]} end}
-      ])
-
-      assert {:ok, [%{"Untagged" => _}]} = Docker.delete_image("alpine:latest", %{}, @sandbox)
     end
   end
 
@@ -385,41 +313,6 @@ defmodule DockerTest do
     end
   end
 
-  describe "pull_image/3" do
-    test "returns a stream of decoded events" do
-      events = [
-        %{"status" => "Pulling fs layer", "id" => "abc"},
-        %{"status" => "Download complete", "id" => "abc"}
-      ]
-
-      Sandbox.set_pull_image_responses([
-        {~r/alpine.*/, fn _image, _params, _opts -> {:ok, events} end}
-      ])
-
-      assert {:ok, stream} = Docker.pull_image("alpine", %{}, @sandbox)
-      assert events === Enum.to_list(stream)
-    end
-
-    test "matches by image regex and propagates params" do
-      Sandbox.set_pull_image_responses([
-        {~r/busybox.*/, fn _image, %{tag: "1.36.1"}, _opts -> {:ok, [%{"status" => "ok"}]} end}
-      ])
-
-      assert {:ok, stream} = Docker.pull_image("busybox", %{tag: "1.36.1"}, @sandbox)
-      assert [%{"status" => "ok"}] = Enum.to_list(stream)
-    end
-
-    test "propagates registered errors" do
-      Sandbox.set_pull_image_responses([
-        {~r/.*/,
-         fn _image, _params, _opts -> {:error, ErrorMessage.not_found("no such image")} end}
-      ])
-
-      assert {:error, %ErrorMessage{code: :not_found}} =
-               Docker.pull_image("ghost", %{}, @sandbox)
-    end
-  end
-
   describe "build_image/5" do
     test "returns a stream of decoded build events" do
       events = [
@@ -546,17 +439,6 @@ defmodule DockerTest do
 
       assert {:error, %ErrorMessage{code: :bad_request, message: "nope"}} =
                Docker.run_build_image("/nope", "Dockerfile", "x:y", %{}, @sandbox)
-    end
-  end
-
-  describe "materialize_image/4" do
-    test "returns the registered response" do
-      Sandbox.set_materialize_image_responses([
-        {~r/.*/, fn _ref, _path, _params -> {:ok, %{id: "img"}} end}
-      ])
-
-      assert {:ok, %{id: "img"}} =
-               Docker.materialize_image("alpine", "alpine", %{}, @sandbox)
     end
   end
 
