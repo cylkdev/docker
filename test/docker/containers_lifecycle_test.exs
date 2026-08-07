@@ -5,7 +5,7 @@ defmodule Docker.ContainersLifecycleTest do
 
   describe "ping/1" do
     test "reaches the daemon" do
-      assert {:ok, _} = Docker.ping()
+      assert {:ok, "OK"} = Docker.ping()
     end
   end
 
@@ -64,6 +64,8 @@ defmodule Docker.ContainersLifecycleTest do
 
       {:ok, id} =
         Docker.create_container("docker-ex-test", name, "alpine:3.19", %{}, cmd: ["sleep", "30"])
+
+      on_exit(fn -> Docker.delete_container(id, %{force: true}) end)
 
       assert {:ok, _} = Docker.delete_container(id)
       assert {:error, %ErrorMessage{code: :not_found}} = Docker.find_container(id)
