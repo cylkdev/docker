@@ -193,14 +193,6 @@ defmodule Docker.Network do
         {:ok, %{body: %{"Id" => id}}} ->
           {:ok, id}
 
-        # A 2xx that carries no ID leaves the caller no handle on the network.
-        {:ok, %{body: body}} ->
-          {:error,
-           ErrorMessage.internal_server_error(
-             "The Docker daemon created a network but returned no ID",
-             %{body: body, name: name}
-           )}
-
         {:error, %ErrorMessage{} = error} ->
           {:error, error}
       end

@@ -87,14 +87,6 @@ defmodule Docker.Exec do
       {:ok, %{body: %{"Id" => exec_id}}} ->
         {:ok, exec_id}
 
-      # A 2xx that carries no exec ID leaves nothing to start.
-      {:ok, %{body: body}} ->
-        {:error,
-         ErrorMessage.internal_server_error(
-           "The Docker daemon created an exec instance but returned no ID",
-           %{body: body, container_ref: container_ref}
-         )}
-
       {:error, %ErrorMessage{} = error} ->
         {:error, error}
     end
