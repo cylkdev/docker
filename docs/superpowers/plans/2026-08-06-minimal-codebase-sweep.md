@@ -612,7 +612,7 @@ defmodule Docker.Engine.CreateIdTest do
   test "create_network returns an id the daemon knows" do
     name = unique_name("docker-ex-test-net")
 
-    assert {:ok, id} = Docker.create_network(name)
+    assert {:ok, id} = Docker.create_network(name, %{})
     on_exit(fn -> Docker.delete_network(id) end)
 
     assert {:ok, network} = Docker.find_network(id)
@@ -1095,9 +1095,10 @@ defmodule Docker.NetworksTest do
   describe "delete_network/2" do
     test "a deleted network is no longer findable" do
       name = unique_name("docker-ex-test-net")
-      {:ok, id} = Docker.create_network(name)
+      {:ok, id} = Docker.create_network(name, %{})
 
-      assert {:ok, _} = Docker.delete_network(id)
+      # delete_network/2 returns bare :ok, NOT {:ok, _}.
+      assert :ok = Docker.delete_network(id)
       assert {:error, %ErrorMessage{code: :not_found}} = Docker.find_network(id)
     end
   end
@@ -1264,11 +1265,12 @@ defmodule Docker.BuildTest do
   end
 
   describe "run_build_image/5" do
+    # run_build_image/5 drains the stream itself and returns bare :ok, NOT {:ok, _}.
     test "builds and returns the tag without the caller draining a stream" do
       tag = unique_tag()
       on_exit(fn -> Docker.delete_image(tag, %{force: true}) end)
 
-      assert {:ok, _output} = Docker.run_build_image(@context, "Dockerfile", tag)
+      assert :ok = Docker.run_build_image(@context, "Dockerfile", tag)
       assert {:ok, _image} = Docker.find_image(tag)
     end
   end
@@ -1276,7 +1278,7 @@ defmodule Docker.BuildTest do
   describe "delete_image/3" do
     test "a deleted image is no longer findable" do
       tag = unique_tag()
-      {:ok, _} = Docker.run_build_image(@context, "Dockerfile", tag)
+      :ok = Docker.run_build_image(@context, "Dockerfile", tag)
 
       assert {:ok, _} = Docker.delete_image(tag, %{force: true})
       assert {:error, %ErrorMessage{code: :not_found}} = Docker.find_image(tag)
@@ -1287,7 +1289,7 @@ defmodule Docker.BuildTest do
     test "carries what the Dockerfile put in it" do
       tag = unique_tag()
       on_exit(fn -> Docker.delete_image(tag, %{force: true}) end)
-      {:ok, _} = Docker.run_build_image(@context, "Dockerfile", tag)
+      :ok = Docker.run_build_image(@context, "Dockerfile", tag)
 
       name = unique_name("docker-ex-test")
       {:ok, id} = Docker.create_container("docker-ex-test", name, tag, %{}, cmd: ["sleep", "30"])
