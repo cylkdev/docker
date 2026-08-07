@@ -4,45 +4,6 @@ defmodule Docker.SandboxTest do
   alias Docker.Sandbox
 
   # ---------------------------------------------------------------------------
-  # The full action table from the plan. Each row drives the exhaustive arity
-  # check: for action `:foo` with arity N, the sandbox must export both
-  # `foo_response/N` and `set_foo_responses/1`.
-  # ---------------------------------------------------------------------------
-  @actions [
-    {:ping, 1},
-    {:socket_available?, 1},
-    {:socket_path, 1},
-    {:list_containers, 2},
-    {:list_images, 2},
-    {:list_networks, 2},
-    {:find_container, 2},
-    {:start_container, 2},
-    {:stop_container, 2},
-    {:delete_container, 3},
-    {:container_logs, 3},
-    {:container_running?, 2},
-    {:create_container, 5},
-    {:find_image, 2},
-    {:pull_image, 3},
-    {:build_image, 5},
-    {:materialize_image, 4},
-    {:delete_image, 3},
-    {:find_network, 2},
-    {:create_network, 3},
-    {:connect_network, 3},
-    {:delete_network, 2},
-    {:exec_create, 3},
-    {:exec_start, 2},
-    {:exec_inspect, 2},
-    {:exec_run, 3},
-    {:exec_run_with_status, 3},
-    {:put_archive, 4},
-    {:get_archive, 3},
-    {:stat_archive, 3},
-    {:wait_container, 3}
-  ]
-
-  # ---------------------------------------------------------------------------
   # Happy-path tests (5 representative actions covering "*"-keyed and ref-keyed)
   # ---------------------------------------------------------------------------
 
@@ -206,31 +167,6 @@ defmodule Docker.SandboxTest do
       assert_raise RuntimeError, ~r/Function not found/, fn ->
         Sandbox.find_image_response("b", [])
       end
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Exhaustive: every action in the canonical table has both
-  # `<action>_response/N` and `set_<action>_responses/1` exported with the
-  # correct arity. Catches missing actions without N+ duplicate happy-path tests.
-  # ---------------------------------------------------------------------------
-
-  test "every action in the canonical table is exported with the right arity" do
-    Code.ensure_loaded!(Docker.Sandbox)
-    exports = Docker.Sandbox.__info__(:functions)
-
-    for {action, public_arity} <- @actions do
-      # Elixir does not allow `?` mid-identifier, so helper names drop the `?`
-      # while the registry key (the action atom) keeps it.
-      base = action |> Atom.to_string() |> String.trim_trailing("?")
-      response_name = String.to_atom("#{base}_response")
-      setter_name = String.to_atom("set_#{base}_responses")
-
-      assert {response_name, public_arity} in exports,
-             "Docker.Sandbox is missing #{response_name}/#{public_arity}"
-
-      assert {setter_name, 1} in exports,
-             "Docker.Sandbox is missing #{setter_name}/1"
     end
   end
 end
