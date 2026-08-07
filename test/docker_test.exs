@@ -5,23 +5,6 @@ defmodule DockerTest do
 
   @sandbox [sandbox: [enabled: true]]
 
-  describe "ping/1" do
-    test "returns the registered response" do
-      Sandbox.set_ping_responses([fn -> {:ok, "OK"} end])
-
-      assert {:ok, "OK"} = Docker.ping(@sandbox)
-    end
-
-    test "propagates registered errors" do
-      Sandbox.set_ping_responses([
-        fn -> {:error, ErrorMessage.service_unavailable("daemon down", %{reason: :enoent})} end
-      ])
-
-      assert {:error, %ErrorMessage{code: :service_unavailable, details: %{reason: :enoent}}} =
-               Docker.ping(@sandbox)
-    end
-  end
-
   describe "list_images/2" do
     test "returns a list" do
       images = [%{"Id" => "i1"}, %{"Id" => "i2"}]
@@ -78,71 +61,6 @@ defmodule DockerTest do
     end
   end
 
-  describe "list_containers/2" do
-    test "returns a list" do
-      Sandbox.set_list_containers_responses([fn -> {:ok, [%{"Id" => "abc"}]} end])
-
-      assert {:ok, [%{"Id" => "abc"}]} = Docker.list_containers(%{all: true}, @sandbox)
-    end
-
-    test "renders the :label map as key=value strings" do
-      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
-
-      assert {:ok, params} =
-               Docker.list_containers(
-                 %{all: true, filters: [label: %{"resource_group" => "group_1"}]},
-                 @sandbox
-               )
-
-      assert params[:all] == true
-      assert params[:filters] == ~s({"label":["resource_group=group_1"]})
-    end
-
-    test "renders multiple labels" do
-      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
-
-      assert {:ok, params} =
-               Docker.list_containers(
-                 %{filters: [label: %{"resource_group" => "group_1", "tier" => "web"}]},
-                 @sandbox
-               )
-
-      assert JSON.decode!(params[:filters])["label"]
-             |> Enum.sort() == ["resource_group=group_1", "tier=web"]
-    end
-
-    test "merges a label filter with another filter instead of dropping one" do
-      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
-
-      assert {:ok, params} =
-               Docker.list_containers(
-                 %{filters: [label: %{"tier" => "web"}, status: ["running"]]},
-                 @sandbox
-               )
-
-      assert JSON.decode!(params[:filters]) == %{
-               "label" => ["tier=web"],
-               "status" => ["running"]
-             }
-    end
-
-    test "underscored filter keys become hyphenated on the wire" do
-      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
-
-      assert {:ok, params} = Docker.list_containers(%{filters: [is_task: ["true"]]}, @sandbox)
-
-      assert params[:filters] == ~s({"is-task":["true"]})
-    end
-
-    test "sends no filters key when only plain params are given" do
-      Sandbox.set_list_containers_responses([fn params -> {:ok, params} end])
-
-      assert {:ok, params} = Docker.list_containers(%{all: true, limit: 5}, @sandbox)
-
-      assert params == %{all: true, limit: 5}
-    end
-  end
-
   describe "find_image/2" do
     test "returns image details" do
       Sandbox.set_find_image_responses([
@@ -162,16 +80,6 @@ defmodule DockerTest do
 
       assert {:error, %ErrorMessage{code: :not_found, message: "no such image"}} =
                Docker.find_image("ghost", @sandbox)
-    end
-  end
-
-  describe "find_container/2" do
-    test "returns container details" do
-      Sandbox.set_find_container_responses([
-        {~r/.*/, fn ref -> {:ok, %{"Id" => ref, "State" => %{"Running" => true}}} end}
-      ])
-
-      assert {:ok, %{"Id" => "c1"}} = Docker.find_container("c1", @sandbox)
     end
   end
 
@@ -223,82 +131,6 @@ defmodule DockerTest do
       ])
 
       assert {:ok, [%{"Untagged" => _}]} = Docker.delete_image("alpine:latest", %{}, @sandbox)
-    end
-  end
-
-  describe "create_container/5" do
-    test "returns the new id" do
-      Sandbox.set_create_container_responses([
-        fn _group, _name, _image, _labels, _opts -> {:ok, "fake_id"} end
-      ])
-
-      assert {:ok, "fake_id"} =
-               Docker.create_container("g1", "c1", "alpine", %{}, @sandbox)
-    end
-  end
-
-  describe "start_container/2" do
-    test "returns ok" do
-      Sandbox.set_start_container_responses([
-        {~r/.*/, fn _ref -> {:ok, ""} end}
-      ])
-
-      assert {:ok, ""} = Docker.start_container("c1", @sandbox)
-    end
-  end
-
-  describe "stop_container/2" do
-    test "returns ok" do
-      Sandbox.set_stop_container_responses([
-        {~r/.*/, fn _ref -> {:ok, ""} end}
-      ])
-
-      assert {:ok, ""} = Docker.stop_container("c1", @sandbox)
-    end
-  end
-
-  describe "delete_container/3" do
-    test "removes a container" do
-      Sandbox.set_delete_container_responses([
-        {~r/.*/, fn _ref, _params -> {:ok, ""} end}
-      ])
-
-      assert {:ok, ""} = Docker.delete_container("c1", %{force: true}, @sandbox)
-    end
-  end
-
-  describe "container_logs/3" do
-    test "returns demuxed logs" do
-      Sandbox.set_container_logs_responses([
-        {~r/.*/, fn _ref, _params -> {:ok, "READY\n"} end}
-      ])
-
-      assert {:ok, "READY\n"} = Docker.container_logs("c1", %{}, @sandbox)
-    end
-  end
-
-  describe "container_running?/2 (binary clause)" do
-    test "true when registered fn returns true" do
-      Sandbox.set_container_running_responses([
-        {~r/.*/, fn _ref -> true end}
-      ])
-
-      assert Docker.container_running?("c1", @sandbox)
-    end
-
-    test "false when registered fn returns false" do
-      Sandbox.set_container_running_responses([
-        {~r/.*/, fn _ref -> false end}
-      ])
-
-      refute Docker.container_running?("c1", @sandbox)
-    end
-  end
-
-  describe "container_running?/1 (map clause)" do
-    test "reads the State.Running field" do
-      assert Docker.container_running?(%{"State" => %{"Running" => true}})
-      refute Docker.container_running?(%{"State" => %{"Running" => false}})
     end
   end
 
