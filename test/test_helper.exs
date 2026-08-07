@@ -1,2 +1,2 @@
-ExUnit.start(exclude: [:external_ssh, :pending])
+ExUnit.start()
 Docker.Sandbox.start_link()

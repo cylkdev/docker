@@ -215,7 +215,6 @@ defmodule Docker.SandboxTest do
   # correct arity. Catches missing actions without N+ duplicate happy-path tests.
   # ---------------------------------------------------------------------------
 
-  @tag :exhaustive
   test "every action in the canonical table is exported with the right arity" do
     Code.ensure_loaded!(Docker.Sandbox)
     exports = Docker.Sandbox.__info__(:functions)
