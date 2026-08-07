@@ -161,7 +161,8 @@ which is accurate.
 
 ## Post-sweep coverage
 
-Captured from `mix coveralls` after the sweep (140 tests, 3 doctests, 0
+Captured from `mix coveralls` immediately after the twelve sweep tasks, before
+the final review's fixes (140 tests, 3 doctests, 0
 failures):
 
 ```
@@ -211,4 +212,38 @@ paths — the transport-failure clauses and the `Docker.StreamError` raises —
 are no longer exercised by anything. `lib/docker/stream_error.ex` remains at
 0.0% for the same reason. This is a real, accepted trade of synthetic
 coverage for honest coverage, not an oversight.
+
+### After the final review
+
+The whole-branch review found two of the gaps above were not trade-offs but
+oversights, and they were fixed. Final figures, 139 tests / 3 doctests / 0
+failures:
+
+```
+ 70.2% lib/docker/client.ex       77.3% lib/docker/containers.ex
+ 76.0% lib/docker/network.ex      73.0% lib/docker/exec.ex
+100.0% lib/docker/info.ex         65.9% lib/docker/image.ex
+ 24.2% lib/docker/sandbox.ex       0.0% lib/docker/stream_error.ex
+[TOTAL] 59.0%
+```
+
+`client.ex` recovered to 70.2% because `stream/4`'s non-2xx path got the test
+it deserved. That path is not hypothetical — every streaming call
+(`pull_image`, `build_image`, following logs) returns its errors through it,
+and one `pull_image` of a nonexistent repository reaches it. Its only test
+had been collateral damage when `FakeHttpServer` went.
+
+The endpoint modules rose again — `containers.ex` to 77.3%, `network.ex` to
+76.0%, `image.ex` to 65.9%, `info.ex` to 100% — because the sandbox suite was
+rewritten to drive the public facade with `sandbox: [enabled: true]`, the way
+the README documents the feature, instead of calling the dispatch layer
+directly. Those 29 dispatch sites live in the endpoint modules, which is why
+`sandbox.ex` itself stays at 24.2%: its remaining 231 missed lines are the
+actions the focused suite deliberately does not exercise, and covering them
+would mean one test per action — the thing this sweep set out to stop doing.
+
+`stream_error.ex` stays at 0.0%, and that one really is the accepted trade:
+reaching a mid-stream `raise` needs a transport failure, which cannot be
+provoked against a healthy daemon without the fake this sweep deleted. It was
+0.0% before the sweep too.
 5. Reduce `sandbox_test.exs` to the sandbox-as-feature suite.
