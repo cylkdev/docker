@@ -124,4 +124,42 @@ defmodule Docker.UtilTest do
       assert error.message =~ "42"
     end
   end
+
+  describe "Util.create_tar/3" do
+    test "builds a tar from a local directory rooted at its basename" do
+      dir = Path.join(System.tmp_dir!(), "put_archive_test_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(dir, "nested"))
+      File.write!(Path.join(dir, "hello.txt"), "hi")
+      File.write!(Path.join([dir, "nested", "deep.txt"]), "deep")
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      base = Path.basename(dir)
+      tar_path = dir <> ".tar"
+      on_exit(fn -> File.rm(tar_path) end)
+
+      assert :ok = Docker.Util.create_tar(tar_path, dir, verbose: false)
+
+      assert {:ok, entries} = :erl_tar.table(String.to_charlist(tar_path), [:compressed])
+      entries = Enum.map(entries, &to_string/1)
+
+      assert "#{base}/hello.txt" in entries
+      assert "#{base}/nested/deep.txt" in entries
+    end
+
+    test "builds a tar from a single local file" do
+      path =
+        Path.join(System.tmp_dir!(), "put_archive_file_#{System.unique_integer([:positive])}")
+
+      File.write!(path, "hi")
+      on_exit(fn -> File.rm!(path) end)
+
+      tar_path = path <> ".tar"
+      on_exit(fn -> File.rm(tar_path) end)
+
+      assert :ok = Docker.Util.create_tar(tar_path, path, verbose: false)
+
+      assert {:ok, entries} = :erl_tar.table(String.to_charlist(tar_path), [:compressed])
+      assert Enum.map(entries, &to_string/1) == [Path.basename(path)]
+    end
+  end
 end
