@@ -15,6 +15,21 @@ def deps do
 end
 ```
 
+### The `SHELL` environment variable
+
+`docker` depends on `:erlexec`, which refuses to start unless `SHELL` is set
+to a non-empty value, so the whole application fails to boot without it. Your
+own shell sets it, but Docker images, systemd units and cron jobs do not — set
+it there yourself:
+
+```dockerfile
+ENV SHELL=/bin/sh
+```
+
+The value only has to be non-empty; it does not change how any command runs.
+The systemd equivalent is `Environment=SHELL=/bin/sh`, and the cron equivalent
+is a `SHELL=/bin/sh` line in the crontab.
+
 ## Quick start
 
 The client talks to the daemon on the standard Unix socket
