@@ -564,15 +564,24 @@ defmodule Docker.Image do
             ["-C", context_path, "-cf", "-", "."]
         end
 
-      case System.cmd("tar", args) do
-        {output, 0} ->
+      # The archive is written to stdout, so it comes back in `:stdout` as a
+      # binary; `:stderr` only ever carries tar's diagnostics.
+      case Exec.run(["tar" | args]) do
+        {:ok, %Exec.Result{exit_status: 0, stdout: output}} ->
           {:ok, output}
 
-        {output, code} ->
+        {:ok, %Exec.Result{exit_status: code, stderr: output}} ->
           {:error,
            ErrorMessage.internal_server_error(
-             "Could not archive the build context: tar exited with #{code}",
+             "Could not archive the build context: tar exited with #{inspect(code)}",
              %{exit_code: code, output: output, context_path: context_path}
+           )}
+
+        {:error, reason} ->
+          {:error,
+           ErrorMessage.internal_server_error(
+             "Could not archive the build context: tar could not be run",
+             %{reason: reason, context_path: context_path}
            )}
       end
     else
