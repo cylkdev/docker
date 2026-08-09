@@ -1,0 +1,3 @@
+- [CVE-2019-5736](https://nvd.nist.gov/vuln/detail/CVE-2019-5736): vulnerable Docker/runc versions allowed an attacker inside a container to overwrite the host’s runc binary and obtain host root access.
+
+- [CVE-2025-31133](https://github.com/opencontainers/runc/security/advisories/GHSA-9493-h29p-rfm2): a runc mount race could provide complete root privileges on the host. It affected runc versions through 1.2.7 and 1.3.2; fixes were released in 1.2.8 and 1.3.3.

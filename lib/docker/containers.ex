@@ -1,0 +1,733 @@
+defmodule Docker.Containers do
+  @moduledoc """
+  Container lifecycle management: create, start, stop, delete, inspect, and
+  run commands.
+
+  A container is a running (or stopped) process packaged with its own
+  filesystem, created from an image. Think of an image as a recipe and a
+  container as the dish — you can make many containers from the same image.
+
+  Every function here is also exposed on the `Docker` facade
+  (e.g. `Docker.create_container/5`). See `Docker` for the full client
+  overview.
+
+  ## Container lifecycle
+
+      # 1. Create a container from an image (it starts stopped)
+      {:ok, id} = Docker.Containers.create_container("my-group", "my-worker", "alpine:3.19", %{})
+
+      # 2. Start it
+      {:ok, _} = Docker.Containers.start_container("my-worker")
+
+      # 3. Check it is running
+      {:ok, container} = Docker.Containers.find_container("my-worker")
+      container["State"]["Running"]  # => true
+
+      # 4. Run a command inside it
+      {:ok, output} = Docker.exec_run("my-worker", "echo hello")
+
+      # 5. Stop and clean up
+      Docker.Containers.stop_container("my-worker")
+      Docker.Containers.delete_container("my-worker")
+  """
+
+  alias Docker.Client
+  alias Docker.Frame
+  alias Docker.Instance
+  alias Docker.Util
+
+  @doc """
+  Returns all stdout and stderr output a container has produced since it
+  started.
+
+  The output from both stdout and stderr is combined into a single binary.
+  Docker's internal stream multiplexing is transparent — you do not need to
+  demultiplex it yourself.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `params` — optional map of Docker Engine query parameters. Useful keys:
+      - `"tail"` — string number of lines to return from the end, e.g.
+        `"20"` for the last 20 lines. Default: all logs.
+      - `"since"` — Unix timestamp (integer) to only return logs after.
+      - `"until"` — Unix timestamp (integer) to only return logs before.
+    - `options` — optional keyword list. Recognised keys:
+      - `:stdout` — boolean, include stdout (default `true`).
+      - `:stderr` — boolean, include stderr (default `true`).
+      - `:timestamps` — boolean, prepend ISO timestamps to each line
+        (default `false`).
+
+  ## Returns
+
+    - `{:ok, output}` — a binary with the combined log output, untrimmed.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such container exists.
+
+  ## Examples
+
+      # All logs
+      {:ok, logs} = Docker.Containers.container_logs("my-worker")
+      IO.puts(logs)
+
+      # Last 20 lines only
+      {:ok, logs} = Docker.Containers.container_logs("my-worker", %{"tail" => "20"})
+
+      # Stderr only, with timestamps
+      {:ok, logs} =
+        Docker.Containers.container_logs("my-worker", %{}, stdout: false, timestamps: true)
+  """
+  @spec container_logs(Docker.container_ref(), Docker.params(), Docker.options()) ::
+          Docker.result(binary())
+  def container_logs(container_ref, params \\ %{}, options \\ []) do
+    params =
+      Map.merge(
+        params,
+        %{
+          stdout: Keyword.get(options, :stdout, true),
+          stderr: Keyword.get(options, :stderr, true),
+          timestamps: Keyword.get(options, :timestamps, false)
+        }
+      )
+
+    url = Util.append_query_string("/containers/#{container_ref}/logs", params)
+    req_options = Keyword.put_new(options, :into, :raw)
+
+    case Client.request(:get, url, nil, req_options) do
+      {:ok, %{body: body}} -> {:ok, Frame.demux_all(body)}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Returns a list of containers known to the daemon.
+
+  By default, only running containers are returned. Pass `all: true` to
+  include stopped containers too.
+
+  ## Parameters
+
+    - `params` — optional map of Docker Engine query parameters: `:all`
+      (boolean, include stopped containers), `:limit` (integer), `:size`
+      (boolean).
+      - `:filters` — optional. Recognised names: `:ancestor`, `:before`,
+        `:exited`, `:expose`, `:health`, `:id`, `:isolation`, `:is_task`,
+        `:label`, `:name`, `:network`, `:publish`, `:since`, `:status`,
+        `:volume`. Several filters may be combined and all must match (AND).
+        Underscored names are hyphenated on the wire (`:is_task` ->
+        `is-task`). Accepted forms:
+
+            [label: %{"tier" => "worker"}]   # map of label key => value
+            [label: ["tier=worker"]]         # values already encoded
+            [status: ["running"]]            # list of strings
+            [status: "running"]              # a lone value
+
+        `:label` is written as a map; the library builds the `"key=value"`
+        strings the Engine requires. The docker CLI's own
+        `["label=tier=worker"]` is an argv token rather than an API shape and
+        returns `{:error, error}` with code `:bad_request`, as does any other
+        shape.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, [map]}` — list of container maps with string keys including
+      `"Id"`, `"Names"`, `"Image"`, `"State"`, and `"Labels"`.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`.
+
+  ## Examples
+
+      # All containers (running + stopped), no filters
+      {:ok, containers} = Docker.Containers.list_containers(%{all: true})
+
+      # Running containers tagged with label `tier=worker`
+      # (see create_container/5 for how to attach labels at creation)
+      {:ok, workers} =
+        Docker.Containers.list_containers(%{filters: [label: %{"tier" => "worker"}]})
+
+      # Multiple label constraints — container must match ALL of them (AND)
+      {:ok, containers} =
+        Docker.Containers.list_containers(%{
+          all: true,
+          filters: [label: %{"env" => "staging", "tier" => "worker"}]
+        })
+
+      # Combining a label filter with another filter
+      {:ok, running} =
+        Docker.Containers.list_containers(%{
+          filters: [label: %{"tier" => "worker"}, status: ["running"]]
+        })
+  """
+  @spec list_containers(Docker.params(), Docker.options()) :: Docker.result(Docker.json_list())
+  def list_containers(params \\ %{}, options \\ []) do
+    with {:ok, params} <- Util.encode_filters_param(params) do
+      url = Util.append_query_string("/containers/json", params)
+
+      case Client.request(:get, url, nil, options) do
+        {:ok, %{body: body}} -> {:ok, body}
+        {:error, %ErrorMessage{} = error} -> {:error, error}
+      end
+    end
+  end
+
+  @doc """
+  Returns a single container by name or ID.
+
+  The `container_ref` is the `name` you passed to `create_container/5` — use
+  that name here and everywhere else. You can also pass a full 64-character
+  container ID or a unique prefix of it.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID (full or unique prefix).
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, map}` — container details map with string keys. Commonly used:
+      - `"Id"` — full 64-character hex ID.
+      - `"Name"` — container name (prefixed with `/`, e.g. `"/my-worker"`).
+      - `"State"` — map with `"Running"` (boolean), `"ExitCode"`, etc.
+      - `"Labels"` — map of label key-value pairs.
+      - `"Image"` — image name the container was created from.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      container matched.
+
+  ## Examples
+
+      # Find by the name given at creation time
+      {:ok, _} = Docker.Containers.create_container("my-group", "my-worker", "alpine:3.19", %{})
+      {:ok, container} = Docker.Containers.find_container("my-worker")
+      container["Id"]                 # full hex ID
+      container["State"]["Running"]   # true or false
+
+      # Find by container ID (or unique prefix)
+      {:ok, container} = Docker.Containers.find_container("3f4a2c9b1e0d")
+  """
+  @spec find_container(Docker.container_ref(), Docker.options()) ::
+          Docker.result(Docker.json_map())
+  def find_container(container_ref, options \\ []) do
+    url = "/containers/#{container_ref}/json"
+
+    case Client.request(:get, url, nil, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Permanently removes a container by name or ID.
+
+  The container must be stopped first. If it is still running, either stop
+  it with `stop_container/2` first, or pass `%{force: true}` in `params` to
+  remove it without stopping.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID to remove.
+    - `params` — optional map. Key: `force` (boolean). When `true`, the
+      running container is killed before removal (default `false`).
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, _}` — container removed.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when no
+      such container exists; `:conflict` when it is running and `force`
+      was not set.
+
+  ## Examples
+
+      # Normal removal (container must be stopped first)
+      Docker.Containers.stop_container("my-worker")
+      {:ok, _} = Docker.Containers.delete_container("my-worker")
+
+      # Force-remove a running container
+      {:ok, _} = Docker.Containers.delete_container("my-worker", %{force: true})
+  """
+  @spec delete_container(Docker.container_ref(), Docker.params(), Docker.options()) ::
+          Docker.result(Docker.json_map() | binary() | list())
+  def delete_container(container_ref, params \\ %{}, options \\ []) do
+    url = Util.append_query_string("/containers/#{container_ref}", params)
+
+    case Client.request(:delete, url, nil, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Creates a new container from an image.
+
+  The container starts in a stopped state. Call `start_container/2` to start
+  it. The `name` you give here is the handle you use everywhere else —
+  `find_container/2`, `start_container/2`, `stop_container/2`, and
+  `Docker.exec_run/3` all accept it.
+
+  ## Parameters
+
+    - `group` — a string naming the group this container belongs to. Written
+      into the container's labels as `"elixir.docker.app"`, so every container
+      in a group can be found later with
+      `list_containers(label: %{"elixir.docker.app" => "my-group"})`.
+    - `name` — a string name for the container. Must be unique on the
+      daemon. Use it as `container_ref` in all other functions.
+    - `image` — the image to create the container from. Examples:
+      `"alpine:3.19"`, `"ubuntu:22.04"`, `"my-app:latest"`. The image
+      must already be present locally (see `Docker.Image.pull_image/3`).
+    - `labels` — a `%{binary() => binary()}` map of arbitrary key-value
+      string pairs. Labels let you tag containers with metadata
+      (environment, role, owner) and filter by them later with
+      `list_containers/2`. Pass `%{}` for no labels.
+    - `options` — optional keyword list. Recognised keys:
+
+  ## Options
+
+    * `:cmd` — list of strings overriding the image's default command.
+      Example: `cmd: ["nginx", "-g", "daemon off;"]`.
+    * `:env` — list of `"KEY=VALUE"` strings to set as environment
+      variables. Example: `env: ["PORT=8080", "DEBUG=true"]`.
+    * `:binds` — list of host-to-container bind mounts in Docker syntax.
+      Example: `binds: ["/host/path:/container/path"]`.
+    * `:mounts` — list of mount config maps (advanced, mirrors Docker API
+      `Mounts` field).
+    * `:networks` — list of network names to connect the container to at
+      creation time. Example: `networks: ["backend", "frontend"]`.
+    * `:network_mode` — string network mode, e.g. `"host"` or `"none"`.
+    * `:exposed_ports` — list of `%{port: integer, protocol: "tcp"|"udp"}`
+      maps declaring ports to expose.
+    * `:port_bindings` — list of
+      `%{protocol: "tcp"|"udp", container_port: integer, host_port: integer,
+      host_ip: binary}` maps mapping host ports to container ports.
+    * `:tty` — boolean, allocate a pseudo-terminal (default `false`).
+    * `:open_stdin` — boolean, attach stdin and stdout/stderr
+      (default `false`). For an interactive shell, combine the three:
+      `cmd: ["/bin/sh"], tty: true, open_stdin: true`.
+    * `:auto_remove` — boolean, delete the container automatically when it
+      stops (default `false`).
+    * `:platform` — string platform specifier, e.g. `"linux/amd64"`.
+
+  ## Returns
+
+    - `{:ok, container_id}` — the 64-character hex ID of the new container.
+      Note: you can use the `name` string instead of this ID in all other
+      functions.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:unprocessable_entity`
+      when the container was created but the daemon reported warnings —
+      `details.warnings` lists them and `details.container_id` is the ID,
+      so the container can still be inspected or removed. `:not_found`
+      when the image does not exist, `:conflict` when the name is taken.
+
+  ## Examples
+
+      # Minimal — no labels, no extra options
+      {:ok, id} = Docker.Containers.create_container("my-group", "my-app", "alpine:3.19", %{})
+
+      # With labels — tag it so you can filter it later
+      {:ok, id} =
+        Docker.Containers.create_container(
+          "my-group",
+          "my-worker",
+          "alpine:3.19",
+          %{"env" => "staging", "tier" => "worker"}
+        )
+
+      # With environment variables and a custom command
+      {:ok, id} =
+        Docker.Containers.create_container(
+          "my-group",
+          "my-server",
+          "nginx:alpine",
+          %{"app" => "web"},
+          env: ["PORT=8080", "DEBUG=true"],
+          cmd: ["nginx", "-g", "daemon off;"],
+          exposed_ports: [%{port: 80, protocol: "tcp"}],
+          port_bindings: [
+            %{protocol: "tcp", container_port: 80, host_port: 80, host_ip: "0.0.0.0"}
+          ]
+        )
+
+      # After creation, find the container by the name you gave it
+      {:ok, container} = Docker.Containers.find_container("my-worker")
+      container["State"]["Running"]  # => false (not started yet)
+
+      # List all containers with a specific label
+      {:ok, workers} =
+        Docker.Containers.list_containers(%{filters: [label: %{"tier" => "worker"}]})
+  """
+  @spec create_container(binary(), binary(), binary(), Docker.labels(), Docker.options()) ::
+          Docker.result(Docker.docker_id())
+  def create_container(group, name, image, labels, options \\ []) do
+    platform = Keyword.get(options, :platform, "")
+
+    url = "/containers/create?name=#{name}&platform=#{platform}"
+
+    config = group |> Instance.new(name, image, labels, options) |> Instance.to_map()
+
+    case Client.request(:post, url, {:json, config}, options) do
+      {:ok, %{body: body}} -> interpret_create_response(body, name)
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  defp interpret_create_response(%{"Id" => id, "Warnings" => []}, _name), do: {:ok, id}
+
+  # The daemon created the container but flagged something about the config it
+  # was given, so the ID is reported alongside the warnings rather than lost.
+  defp interpret_create_response(%{"Id" => id, "Warnings" => warnings}, name) do
+    {:error,
+     ErrorMessage.unprocessable_entity(
+       "The Docker daemon created the container with warnings: #{Enum.join(warnings, "; ")}",
+       %{warnings: warnings, container_id: id, name: name}
+     )}
+  end
+
+  @doc """
+  Starts a previously created container.
+
+  The container must have been created with `create_container/5` first. If
+  the container is already running, this returns an error.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, _}` — container is now starting.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_modified` when the
+      container is already running, `:not_found` when it does not exist.
+
+  ## Examples
+
+      {:ok, _} = Docker.Containers.start_container("my-worker")
+  """
+  @spec start_container(Docker.container_ref(), Docker.options()) ::
+          Docker.result(binary() | Docker.json_map())
+  def start_container(container_ref, options \\ []) do
+    url = "/containers/#{container_ref}/start"
+
+    case Client.request(:post, url, {:json, %{}}, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Stops a running container.
+
+  Sends SIGTERM to the container's main process and waits for it to exit.
+  If the process does not exit within the grace period, Docker sends SIGKILL.
+  The container remains in a stopped state and can be started again with
+  `start_container/2` or removed with `delete_container/3`.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, _}` — container is stopped.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_modified` when the
+      container is already stopped, `:not_found` when it does not exist.
+
+  ## Examples
+
+      {:ok, _} = Docker.Containers.stop_container("my-worker")
+  """
+  @spec stop_container(Docker.container_ref(), Docker.options()) ::
+          Docker.result(binary() | Docker.json_map())
+  def stop_container(container_ref, options \\ []) do
+    url = "/containers/#{container_ref}/stop"
+
+    case Client.request(:post, url, {:json, %{}}, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Uploads files into a container's filesystem by extracting a tar archive at
+  a given path.
+
+  Use this to inject config files, scripts, or build artifacts into a
+  container without rebuilding the image. The container does not need to be
+  running — this works on stopped containers too.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `dest_path` — the absolute path inside the container where the
+      archive will be extracted. Example: `"/app"` or `"/etc/myapp"`.
+    - `tar_path` — path to a pre-built tar archive on the local filesystem.
+      Entries are extracted relative to `dest_path`, so an archive whose
+      entries are rooted at `assets/` unpacks into `<dest_path>/assets/`.
+    - `options` — optional keyword list. See `Docker` for the options table.
+      Also accepts `:no_overwrite_dir_non_dir` and `:copy_uid_gid` (boolean)
+      forwarded to the Docker Engine API.
+
+  ## Returns
+
+    - `{:ok, _}` — archive extracted successfully.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:bad_request` when
+      `tar_path` could not be read, or the daemon rejected the request
+      (path not absolute, malformed archive); `:not_found` when the
+      container does not exist.
+
+  ## Examples
+
+      :ok = :erl_tar.create(~c"/tmp/assets.tar", [{~c"assets", ~c"./assets"}], [:compressed])
+
+      # Extracts to /tmp/assets/...
+      {:ok, _} = Docker.Containers.put_archive("my-container", "/tmp", "/tmp/assets.tar")
+  """
+  @spec put_archive(
+          Docker.container_ref(),
+          binary(),
+          binary(),
+          Docker.options()
+        ) :: Docker.result(map() | binary())
+  def put_archive(container_ref, dest_path, tar_path, options \\ [])
+      when is_binary(container_ref) and is_binary(dest_path) and is_binary(tar_path) do
+    query = %{path: dest_path}
+
+    query =
+      case Keyword.get(options, :no_overwrite_dir_non_dir) do
+        nil -> query
+        val -> Map.put(query, :noOverwriteDirNonDir, val)
+      end
+
+    query =
+      case Keyword.get(options, :copy_uid_gid) do
+        nil -> query
+        val -> Map.put(query, :copyUIDGID, val)
+      end
+
+    url = Util.append_query_string("/containers/#{container_ref}/archive", query)
+
+    with {:ok, tar} <- read_tar(tar_path),
+         {:ok, %{body: body}} <- Client.request(:put, url, {:tar, tar}, options) do
+      {:ok, body}
+    end
+  end
+
+  defp read_tar(tar_path) do
+    case File.read(tar_path) do
+      {:ok, tar} ->
+        {:ok, tar}
+
+      {:error, reason} ->
+        {:error,
+         ErrorMessage.bad_request(
+           "Could not read the tar archive at #{tar_path}: #{:file.format_error(reason)}",
+           %{tar_path: tar_path, reason: reason}
+         )}
+    end
+  end
+
+  @doc """
+  Downloads a path from a container's filesystem as a tar archive.
+
+  The read counterpart to `put_archive/4`. The container does not need to be
+  running — this works on stopped containers too.
+
+  The daemon always wraps the requested path in a tar, so asking for a single
+  file returns a tar containing one entry. This function hands back that outer
+  archive verbatim; it does not unwrap it. Use `download_archive/4` with
+  `extract: true` to unpack to disk, or `:erl_tar` for in-memory access.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `src_path` — the absolute path inside the container to download.
+      Example: `"/app/build"` or `"/etc/myapp/config.toml"`.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, tar}` — the tar archive as a binary.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:bad_request` when
+      `src_path` is not absolute; `:not_found` when the container or the
+      path inside it does not exist.
+
+  ## Examples
+
+      {:ok, tar} = Docker.Containers.get_archive("my-container", "/app/build")
+      {:ok, files} = :erl_tar.extract({:binary, tar}, [:memory])
+  """
+  @spec get_archive(Docker.container_ref(), binary(), Docker.options()) ::
+          Docker.result(binary())
+  def get_archive(container_ref, src_path, options \\ [])
+      when is_binary(container_ref) and is_binary(src_path) do
+    url = archive_url(container_ref, src_path)
+
+    # Req unpacks an `application/x-tar` body by default, which would hand
+    # back entries instead of the archive. `:raw` turns body decoding off.
+    options = Keyword.put_new(options, :into, :raw)
+
+    case Client.request(:get, url, nil, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+
+  @doc """
+  Downloads a path from a container and writes it to the local filesystem.
+
+  Calls `get_archive/3` and writes the returned bytes to `dest_path`. The file
+  written is the daemon's outer tar, unmodified — this adds persistence, not
+  extraction. Use `:erl_tar` on the result when you need the contents.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `src_path` — the absolute path inside the container to download.
+    - `dest_path` — the local path to write the tar to.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, dest_path}` — written successfully.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. Errors from
+      `get_archive/3` propagate unchanged; a failed write is
+      `:internal_server_error`.
+
+  ## Examples
+
+      {:ok, _} =
+        Docker.Containers.download_archive("my-container", "/app/build", "/tmp/build.tar")
+
+      :ok = :erl_tar.extract("/tmp/build.tar", [{:cwd, ~c"/tmp/out"}])
+  """
+  @spec download_archive(
+          Docker.container_ref(),
+          binary(),
+          binary(),
+          Docker.options()
+        ) :: Docker.result(binary())
+  def download_archive(container_ref, src_path, dest_path, options \\ [])
+      when is_binary(container_ref) and is_binary(src_path) and is_binary(dest_path) do
+    with {:ok, tar} <- get_archive(container_ref, src_path, options),
+         :ok <- write_tar(tar, dest_path) do
+      {:ok, dest_path}
+    end
+  end
+
+  defp write_tar(tar, dest_path) do
+    case File.write(dest_path, tar) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         ErrorMessage.internal_server_error(
+           "Could not write the tar archive #{dest_path}: #{:file.format_error(reason)}",
+           %{dest_path: dest_path, reason: reason}
+         )}
+    end
+  end
+
+  @doc """
+  Returns metadata about a path inside a container without downloading it.
+
+  Issues a `HEAD` against the same endpoint as `get_archive/3`. The daemon
+  sends no body, so this is the cheap way to check that a path exists before
+  pulling down a potentially large directory.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `src_path` — the absolute path inside the container to stat.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, stat}` — a map with the daemon's keys: `"name"`, `"size"`,
+      `"mode"`, `"mtime"`, and `"linkTarget"`.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when the
+      container or path does not exist. A stat header the daemon could not
+      have sent — missing, not base64, or not a JSON object — raises rather
+      than returning an error.
+
+  ## Examples
+
+      {:ok, stat} = Docker.Containers.stat_archive("my-container", "/app/build")
+      stat["size"]  # => 4096
+  """
+  @spec stat_archive(Docker.container_ref(), binary(), Docker.options()) ::
+          Docker.result(map())
+  def stat_archive(container_ref, src_path, options \\ [])
+      when is_binary(container_ref) and is_binary(src_path) do
+    url = archive_url(container_ref, src_path)
+
+    with {:ok, %{headers: headers}} <- Client.request(:head, url, nil, options) do
+      decode_path_stat(headers)
+    end
+  end
+
+  @stat_header "x-docker-container-path-stat"
+
+  # The daemon sends this header as base64-encoded JSON on every 2xx. A
+  # response that is not that shape is a broken daemon, not a case to handle.
+  defp decode_path_stat(headers) do
+    {_key, encoded} = List.keyfind(headers, @stat_header, 0)
+    {:ok, json} = Base.decode64(encoded)
+    {:ok, %{} = stat} = JSON.decode(json)
+
+    {:ok, stat}
+  end
+
+  defp archive_url(container_ref, src_path) do
+    Util.append_query_string("/containers/#{container_ref}/archive", %{path: src_path})
+  end
+
+  @doc """
+  Blocks until a container stops, then returns its exit status.
+
+  This endpoint long-polls: the daemon holds the connection open for as long
+  as the container keeps running, which may be hours. `wait_container/3`
+  therefore waits indefinitely by default. Pass `:receive_timeout` to bound
+  it — a timeout that elapses comes back as `:gateway_timeout`.
+
+  A container exiting non-zero is a successful call reporting a failed
+  container, so it returns `{:ok, _}`. An `{:error, _}` here means the Docker
+  call itself failed.
+
+  ## Parameters
+
+    - `container_ref` — the container name or ID.
+    - `params` — optional map of Docker Engine query parameters. Useful keys:
+      - `:condition` — when to return: `"not-running"` (the default),
+        `"next-exit"`, or `"removed"`.
+    - `options` — optional keyword list. See `Docker` for the options table.
+
+  ## Returns
+
+    - `{:ok, status}` — a map with the daemon's keys: `"StatusCode"` (the
+      container's exit code) and `"Error"`, which reports why the wait ended
+      rather than why the process did.
+    - `{:error, error}` — an `t:ErrorMessage.t/0`. `:not_found` when the
+      container does not exist; `:bad_request` for an unknown condition.
+
+  ## Examples
+
+      {:ok, %{"StatusCode" => 0}} = Docker.Containers.wait_container("my-worker")
+
+      # Bound the wait to 5 seconds
+      Docker.Containers.wait_container("my-worker", %{}, receive_timeout: 5_000)
+  """
+  @spec wait_container(Docker.container_ref(), map(), Docker.options()) ::
+          Docker.result(map())
+  def wait_container(container_ref, params \\ %{}, options \\ [])
+      when is_binary(container_ref) and is_map(params) do
+    url = Util.append_query_string("/containers/#{container_ref}/wait", params)
+    options = Keyword.put_new(options, :receive_timeout, :infinity)
+
+    case Client.request(:post, url, nil, options) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, %ErrorMessage{} = error} -> {:error, error}
+    end
+  end
+end

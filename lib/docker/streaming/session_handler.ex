@@ -1,0 +1,78 @@
+defmodule Docker.Streaming.SessionHandler do
+  @moduledoc """
+  `OneOhOne.Handler` implementation that forwards every byte of an
+  upgraded Docker stream to a designated owner pid.
+
+  `Docker.Streaming.Session.recv/3` is pull-based (idle-timeout
+  or read-until-delimiter), while `OneOhOne` is push-based (handler
+  callbacks). This module bridges the two by relaying handler events
+  as Erlang messages to the owner process. The owner — the same
+  process that called `Docker.attach/2`, `Docker.exec_session/3`, or
+  `Docker.send_message/4` — drains those messages from its mailbox
+  during `Session.recv/3`.
+
+  ## Message protocol
+
+  Every message uses the connection pid as its second element so an
+  owner can demultiplex bytes from multiple concurrent sessions.
+  Callbacks run inside the connection process, so that pid is
+  `self()`:
+
+    * `{:docker_stream, conn_pid, :data, bytes}` — bytes arrived
+      from the daemon. Already past any HTTP framing.
+    * `{:docker_stream, conn_pid, :closed}` — the connection was
+      closed (by the daemon or by `OneOhOne.close/1`).
+
+  The handler stores the owner pid in `socket.assigns[:owner]` so it
+  is available to every callback without re-reading params.
+
+  An owner pid is mandatory: `connect/2` matches only on
+  `%{owner: pid}`, so connecting without one raises rather than
+  producing a session whose bytes have nowhere to go.
+  """
+
+  use OneOhOne.Handler
+
+  alias OneOhOne.Socket
+
+  @logger_prefix "Docker.Streaming.SessionHandler"
+
+  @impl true
+  def connect(%{owner: owner}, %Socket{} = socket) do
+    Docker.Log.debug(@logger_prefix, "Connecting session | owner=#{inspect(owner)}")
+    {:ok, OneOhOne.assign(socket, :owner, owner)}
+  end
+
+  @impl true
+  def handle_in(bytes, %Socket{} = socket) do
+    conn = self()
+
+    Docker.Log.debug(
+      @logger_prefix,
+      "Handling incoming data | conn=#{inspect(conn)}, bytes_size=#{byte_size(bytes)}"
+    )
+
+    forward(socket, {:docker_stream, conn, :data, bytes})
+    {:ok, socket}
+  end
+
+  @impl true
+  def terminate(_reason, %Socket{} = socket) do
+    conn = self()
+
+    Docker.Log.debug(@logger_prefix, "Terminating session | conn=#{inspect(conn)}")
+
+    forward(socket, {:docker_stream, conn, :closed})
+    :ok
+  end
+
+  defp forward(%Socket{assigns: %{owner: owner}}, message) when is_pid(owner) do
+    Docker.Log.debug(
+      @logger_prefix,
+      "Forwarding message | owner=#{inspect(owner)}, message=#{inspect(message)}"
+    )
+
+    send(owner, message)
+    :ok
+  end
+end
