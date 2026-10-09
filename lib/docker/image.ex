@@ -525,10 +525,10 @@ defmodule Docker.Image do
       # The archive is written to stdout, so it comes back in `:stdout` as a
       # binary; `:stderr` only ever carries tar's diagnostics.
       case Exec.run(["tar" | args]) do
-        {:ok, %Exec.Result{exit_status: 0, stdout: output}} ->
+        {:ok, %Exec.Result{exit: %{exit_reason: 0}, stdout: output}} ->
           {:ok, output}
 
-        {:ok, %Exec.Result{exit_status: code, stderr: output}} ->
+        {:ok, %Exec.Result{exit: %{exit_reason: code}, stderr: output}} ->
           {:error,
            ErrorMessage.internal_server_error(
              "Could not archive the build context: tar exited with #{inspect(code)}",
